@@ -35,6 +35,9 @@ mlpsp-eval-lseg = "mip360.eval_lseg_table2:main"
 mlpsp-benchmark = "tools.benchmark_inference:main"
 mlpsp-convert-checkpoint = "tools.convert_legacy_checkpoint:main"
 
+[tool.setuptools]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt", "licenses/*.md"]
+
 [tool.setuptools.packages.find]
 include = ["mip360*", "replica*", "tools*"]
 
