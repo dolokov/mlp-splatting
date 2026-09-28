@@ -1,0 +1,8 @@
+numpy>=1.24
+imageio>=2.31
+Pillow>=9.5
+tqdm>=4.65
+torch>=2.10.0
+torchvision>=0.25.0
+packaging>=23.2
+ninja>=1.11
