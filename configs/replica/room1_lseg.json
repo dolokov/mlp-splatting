@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "replica-room1-lseg",
-  "description": "Replica room1 with m=4 octree initialization and 512D LSeg features.",
+  "description": "Replica room1 with 512D LSeg features.",
   "training": {
     "dataset": "replica",
     "factor": 1,

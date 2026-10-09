@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-points-per-leaf", "--min-points", "--min_points",
         dest="max_points_per_leaf", type=int, default=None,
-        help="Octree threshold m: 4 for Replica, 10 for ScanNet unless overridden.",
+        help="Maximum points per octree leaf for scene initialization.",
     )
     parser.add_argument("--llffhold", type=int, default=8, help="Hold out every Nth input view.")
     parser.add_argument(

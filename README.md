@@ -20,7 +20,7 @@ support. Optional feature distillation supports open-vocabulary selection,
 segmentation, and editing.
 
 This repository provides a tile-based CUDA implementation with training and
-evaluation entrypoints. The supplied Replica configurations use **m=4**.
+evaluation entrypoints for Replica and ScanNet.
 
 ## Installation
 
@@ -116,8 +116,8 @@ for scene in room0 room1 office3 office4; do
 done
 ```
 
-Each configuration uses m=4 octree initialization, 60,000 iterations,
-constant learning rates, 8×8 tiles, four-view mosaics, and 512D LSeg feature
+The supplied configurations use 60,000 iterations, constant learning rates,
+8×8 tiles, four-view mosaics, and 512D LSeg feature
 supervision. Model, optimizer, and resolved configuration files are saved in
 the output directory. See [configuration details](configs/replica/README.md).
 
@@ -167,7 +167,7 @@ teacher-generated label maps measure agreement with that teacher.
 ```text
 train.py             training entrypoint
 evaluate.py          RGB evaluation entrypoint
-configs/replica/     four m=4 scene configurations
+configs/replica/      scene configurations
 scannet/             ScanNet loader and shared model, trainer, evaluation
 scannet/cuda/         CUDA renderer and training kernels
 replica/             Replica loader and launcher

@@ -1,7 +1,7 @@
 # Replica configurations
 
-The four scene configurations use m=4 octree initialization and the same
-training settings: seed 2025, 60,000 iterations, constant learning rates,
+The four scene configurations share the same training settings:
+seed 2025, 60,000 iterations, constant learning rates,
 8×8 tile-center rendering, four-view mosaics, and 512D LSeg features.
 
 | Configuration | Training views | Excluded training images |

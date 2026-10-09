@@ -1002,7 +1002,7 @@ def main():
     parser.add_argument("--limit_frames", type=int, default=0, help="Evaluate only first N frames (0 means all).")
     parser.add_argument("--warmup_frames", type=int, default=1, help="Number of initial frames excluded from FPS timing.")
     parser.add_argument("--score_threshold", type=float, default=3e-3, help="Tile renderer score threshold.")
-    parser.add_argument("--min_points", type=int, default=None, help="Training octree threshold m; defaults to 4 for Replica and 10 for ScanNet.")
+    parser.add_argument("--min_points", type=int, default=None, help="Octree initialization threshold used during training.")
     parser.add_argument("--tile_size", type=int, default=8, choices=[8, 16], help="Tile pixel size used by scene constructor (must match training).")
     parser.add_argument(
         "--tile_order",

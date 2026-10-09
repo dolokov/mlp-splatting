@@ -172,7 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="max_points_per_leaf",
         type=int,
         default=None,
-        help="Training octree threshold m; defaults to 4 for Replica and 10 for ScanNet.",
+        help="Octree initialization threshold used during training.",
     )
     parser.add_argument("--feature-gating-beta", type=float, default=None)
     parser.add_argument("--feature-gating-temp", type=float, default=None)

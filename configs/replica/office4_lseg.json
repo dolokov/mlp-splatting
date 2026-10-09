@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "replica-office4-lseg",
-  "description": "Replica office4 with m=4 octree initialization and 512D LSeg features.",
+  "description": "Replica office4 with 512D LSeg features.",
   "training": {
     "dataset": "replica",
     "factor": 1,
