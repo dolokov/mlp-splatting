@@ -23,11 +23,13 @@ import torch
 import torch.nn.functional as F
 try:
     from .safe_io import load_checkpoint
+    from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from .utils.loss_utils import ssim
     from .checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
     from .config import parse_args_with_config
 except ImportError:  # Support direct script execution.
     from safe_io import load_checkpoint
+    from camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from utils.loss_utils import ssim
     from checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
     from config import parse_args_with_config
@@ -135,6 +137,7 @@ def _load_dataset_class(loader_name: str):
 def _build_dataset(dataset_cls, args):
     kwargs = dict(
         basedir=args.data_dir,
+        camera_mode=getattr(args, "camera_mode", "legacy-centered"),
         factor=int(args.factor),
         llffhold=int(args.llffhold),
         split=args.split,
@@ -167,6 +170,7 @@ def _load_scene_tile_cuda(
     if not isinstance(raw_ckpt, dict):
         raise TypeError(f"Unsupported checkpoint format: {scene_ckpt_path}")
     metadata = raw_ckpt.get("metadata", {})
+    camera_mode = checkpoint_camera_mode(raw_ckpt)
     if not isinstance(metadata, dict):
         metadata = {}
     gating_beta = float(
@@ -225,6 +229,7 @@ def _load_scene_tile_cuda(
         )
     if unexpected:
         print(f"[Warn] Unexpected keys while loading scene: {unexpected[:10]} (total={len(unexpected)})")
+    scene.camera_mode = camera_mode
     scene.eval()
     return scene
 
@@ -352,10 +357,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-threshold", "--score_threshold", dest="score_threshold", type=float, default=3e-3, help="Tile renderer score threshold.")
     parser.add_argument(
         "--max-points-per-leaf", "--min-points", "--min_points",
-        dest="max_points_per_leaf", type=int, default=10,
+        dest="max_points_per_leaf", type=int, default=4,
         help="Training octree threshold m, recorded here for provenance.",
     )
     parser.add_argument("--tile-size", "--tile_size", dest="tile_size", type=int, default=8, choices=[8, 16], help="Tile pixel size used by scene constructor (must match training).")
+    parser.add_argument("--tile-candidate-capacity", type=int, choices=(768, 1536), default=1536,
+                        help="Maximum primitives per tile; overflow raises an error.")
     parser.add_argument("--limit-frames", "--limit_frames", dest="limit_frames", type=int, default=0, help="Evaluate first N frames only (0 means all).")
     parser.add_argument("--warmup-frames", "--warmup_frames", dest="warmup_frames", type=int, default=1, help="Initial frames excluded from FPS timing.")
     parser.add_argument("--disable-lpips", "--disable_lpips", dest="disable_lpips", action="store_true", help="Disable LPIPS computation.")
@@ -374,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parse_args_with_config(parser, argv, section="evaluation")
+    os.environ["MLPSP_TILE_CANDIDATE_CAPACITY"] = str(args.tile_candidate_capacity)
     if args.expected_views < 0:
         parser.error("--expected-views cannot be negative")
     if args.max_points_per_leaf <= 0:
@@ -388,8 +396,14 @@ def main(argv: list[str] | None = None) -> None:
 
     os.environ["MLPSP_TILE_ORDER"] = str(args.tile_order)
 
+    camera_checkpoint = load_checkpoint(args.scene_ckpt)
+    args.camera_mode = checkpoint_camera_mode(camera_checkpoint)
+    if args.camera_mode == "colmap-native" and args.dataset_loader != "mip360":
+        raise ValueError("Native camera checkpoint requires the mip360 COLMAP loader")
     dataset_cls = _load_dataset_class(args.dataset_loader)
     dataset = _build_dataset(dataset_cls, args)
+    validate_checkpoint_calibration(camera_checkpoint, dataset)
+    del camera_checkpoint
     if len(dataset) == 0:
         raise RuntimeError("Dataset split is empty.")
     if int(args.expected_views) > 0 and len(dataset) != int(args.expected_views):
@@ -559,6 +573,7 @@ def main(argv: list[str] | None = None) -> None:
         "data_dir": os.path.abspath(args.data_dir),
         "scene_ckpt": scene_ckpt,
         "dataset_loader": str(args.dataset_loader),
+        "camera_mode": args.camera_mode,
         "split": str(args.split),
         "split_mode": str(args.split_mode),
         "factor": int(args.factor),

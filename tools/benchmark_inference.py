@@ -171,8 +171,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-points-per-leaf", "--min-points", "--min_points",
         dest="max_points_per_leaf",
         type=int,
-        default=10,
-        help="Octree leaf capacity; legacy --min-points spelling is retained for compatibility.",
+        default=None,
+        help="Training octree threshold m; defaults to 4 for Replica and 10 for Mip-NeRF360.",
     )
     parser.add_argument("--feature-gating-beta", type=float, default=None)
     parser.add_argument("--feature-gating-temp", type=float, default=None)
@@ -184,6 +184,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.max_points_per_leaf is None:
+        args.max_points_per_leaf = 4 if args.dataset_loader == "replica" else 10
     if args.warmup_cycles < 0 or args.timed_cycles <= 0:
         raise ValueError("warmup cycles must be non-negative and timed cycles must be positive")
     if not 0.0 < args.score_threshold < 1.0:

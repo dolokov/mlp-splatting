@@ -48,9 +48,11 @@ from PIL import Image, ImageDraw
 
 try:
     from .safe_io import load_checkpoint
+    from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from .checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
 except ImportError:  # Support direct script execution.
     from safe_io import load_checkpoint
+    from camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
 
 FEATURE3DGS_MANUAL_RELABEL_1BASED = {
@@ -818,6 +820,7 @@ def _load_decoder_if_needed(
 def _build_dataset(dataset_cls, args, split: str, feature_type: str, feature_dir: str | None):
     kwargs = dict(
         basedir=args.data_dir,
+        camera_mode=getattr(args, "camera_mode", "legacy-centered"),
         factor=int(args.factor),
         llffhold=int(args.llffhold),
         split=split,
@@ -869,6 +872,7 @@ def _load_scene_tile_cuda(
         from cumodel import NeuralPrimitiveSceneTileCUDA
 
     raw_ckpt = load_checkpoint(scene_ckpt_path)
+    camera_mode = checkpoint_camera_mode(raw_ckpt)
     if not isinstance(raw_ckpt, dict):
         raise TypeError(f"Unsupported checkpoint format: {scene_ckpt_path}")
     metadata = raw_ckpt.get("metadata", {}) if isinstance(raw_ckpt.get("metadata", {}), dict) else {}
@@ -927,6 +931,7 @@ def _load_scene_tile_cuda(
         )
     if unexpected:
         print(f"[Warn] Unexpected keys while loading scene: {unexpected[:10]} (total={len(unexpected)})")
+    scene.camera_mode = camera_mode
     scene.eval()
     return scene, int(feature_dim_low)
 
@@ -997,7 +1002,7 @@ def main():
     parser.add_argument("--limit_frames", type=int, default=0, help="Evaluate only first N frames (0 means all).")
     parser.add_argument("--warmup_frames", type=int, default=1, help="Number of initial frames excluded from FPS timing.")
     parser.add_argument("--score_threshold", type=float, default=3e-3, help="Tile renderer score threshold.")
-    parser.add_argument("--min_points", type=int, default=10, help="min_points used by scene constructor.")
+    parser.add_argument("--min_points", type=int, default=None, help="Training octree threshold m; defaults to 4 for Replica and 10 for Mip-NeRF360.")
     parser.add_argument("--tile_size", type=int, default=8, choices=[8, 16], help="Tile pixel size used by scene constructor (must match training).")
     parser.add_argument(
         "--tile_order",
@@ -1018,6 +1023,8 @@ def main():
     parser.add_argument("--save_json", type=str, default="", help="Optional path to save evaluation summary JSON.")
     parser.add_argument("--device", type=str, default="cuda", help="Device, e.g. cuda or cuda:0.")
     args = parser.parse_args()
+    if args.min_points is None:
+        args.min_points = 4 if args.dataset_loader == "replica" else 10
 
     if not torch.cuda.is_available() and str(args.device).startswith("cuda"):
         raise RuntimeError("CUDA device requested but torch.cuda.is_available() is False.")
@@ -1034,8 +1041,14 @@ def main():
     if num_classes != len(labels):
         raise RuntimeError("Label count and text feature count mismatch after loading.")
 
+    camera_checkpoint = load_checkpoint(args.scene_ckpt)
+    args.camera_mode = checkpoint_camera_mode(camera_checkpoint)
+    if args.camera_mode == "colmap-native" and args.dataset_loader != "mip360":
+        raise ValueError("Native camera checkpoint requires the mip360 COLMAP loader")
     dataset_cls = _load_dataset_class(args.dataset_loader)
     dataset = _build_dataset(dataset_cls, args, split=args.split, feature_type="none", feature_dir=None)
+    validate_checkpoint_calibration(camera_checkpoint, dataset)
+    del camera_checkpoint
     if len(dataset) == 0:
         raise RuntimeError("Dataset split is empty.")
 

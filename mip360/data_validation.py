@@ -13,10 +13,14 @@ MAX_FOCAL_ASYMMETRY = 0.01
 MAX_PRINCIPAL_POINT_OFFSET_PX = 0.5 + 1e-6
 
 
-def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int | str]:
-    """Return intrinsics supported by the current centered-pinhole ray model."""
+def parse_supported_camera(camera, *, image_name: str, camera_mode="legacy-centered") -> dict:
+    """Validate legacy centered-pinhole or opt-in native COLMAP intrinsics."""
     model = str(camera.model)
     params = np.asarray(camera.params, dtype=np.float64).reshape(-1)
+    if camera_mode not in {"legacy-centered", "colmap-native"}:
+        raise ValueError(f"Unknown camera_mode={camera_mode!r}")
+    native = camera_mode == "colmap-native"
+    distortion = [0.0] * 4
     width = int(camera.width)
     height = int(camera.height)
     if width <= 0 or height <= 0:
@@ -39,6 +43,11 @@ def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int 
                 f"4 parameters, got {params.size}."
             )
         fx, fy, cx, cy = map(float, params)
+    elif model == "OPENCV" and native:
+        if params.size != 8:
+            raise ValueError("COLMAP OPENCV requires 8 parameters")
+        fx, fy, cx, cy = map(float, params[:4])
+        distortion = params[4:].tolist()
     else:
         raise ValueError(
             f"Unsupported COLMAP camera model '{model}' for image '{image_name}'. "
@@ -46,7 +55,7 @@ def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int 
             "cameras with centered principal points and approximately square pixels."
         )
 
-    values = np.asarray((fx, fy, cx, cy), dtype=np.float64)
+    values = np.asarray((fx, fy, cx, cy, *distortion), dtype=np.float64)
     if not np.isfinite(values).all() or fx <= 0.0 or fy <= 0.0:
         raise ValueError(
             f"Invalid COLMAP intrinsics for image '{image_name}': "
@@ -54,7 +63,7 @@ def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int 
         )
     focal_mean = 0.5 * (fx + fy)
     focal_asymmetry = abs(fx - fy) / focal_mean
-    if focal_asymmetry >= MAX_FOCAL_ASYMMETRY:
+    if not native and focal_asymmetry >= MAX_FOCAL_ASYMMETRY:
         raise ValueError(
             f"Unsupported non-square COLMAP pixels for image '{image_name}': "
             f"fx={fx}, fy={fy}, relative difference={focal_asymmetry:.3%}; "
@@ -63,7 +72,7 @@ def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int 
 
     expected_cx = width * 0.5
     expected_cy = height * 0.5
-    if (
+    if not native and (
         abs(cx - expected_cx) > MAX_PRINCIPAL_POINT_OFFSET_PX
         or abs(cy - expected_cy) > MAX_PRINCIPAL_POINT_OFFSET_PX
     ):
@@ -80,10 +89,11 @@ def parse_supported_camera(camera, *, image_name: str) -> dict[str, float | int 
         "fy": fy,
         "cx": cx,
         "cy": cy,
+        "distortion": distortion,
     }
 
 
-def validated_camera_intrinsics_by_image(images, cameras) -> dict[str, dict]:
+def validated_camera_intrinsics_by_image(images, cameras, *, camera_mode="legacy-centered") -> dict[str, dict]:
     """Validate that every COLMAP image uses one shared supported calibration."""
     by_base: dict[str, dict] = {}
     reference = None
@@ -97,7 +107,7 @@ def validated_camera_intrinsics_by_image(images, cameras) -> dict[str, dict]:
             raise KeyError(
                 f"COLMAP image '{base}' references missing camera id {image.camera_id}."
             )
-        intrinsics = parse_supported_camera(cameras[image.camera_id], image_name=base)
+        intrinsics = parse_supported_camera(cameras[image.camera_id], image_name=base, camera_mode=camera_mode)
         if reference is None:
             reference = intrinsics
             reference_name = base
@@ -114,7 +124,8 @@ def validated_camera_intrinsics_by_image(images, cameras) -> dict[str, dict]:
                 rtol=1e-6,
                 atol=1e-6,
             )
-            if not (same_shape_and_model and same_values):
+            same_distortion = np.allclose(intrinsics["distortion"], reference["distortion"], rtol=1e-6, atol=1e-6)
+            if not (same_shape_and_model and same_values and same_distortion):
                 raise ValueError(
                     "Per-image COLMAP intrinsics are unsupported: "
                     f"image '{base}' (camera {image.camera_id}) differs from "

@@ -1,6 +1,6 @@
-"""Small, strict JSON experiment-config loader.
+"""Strict JSON configuration loader.
 
-Configs contain only portable experiment choices.  Scene, checkpoint, and output
+Configs contain portable training and evaluation settings. Scene, checkpoint, and output
 paths stay on the command line so a checked-in recipe never captures one
 machine's directory layout.
 """

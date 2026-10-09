@@ -18,8 +18,21 @@ def tile_ext():
 
     default_source = Path(__file__).parents[1] / "mip360" / "cuda" / "np_tile_kernels.cu"
     source = Path(os.environ.get("MLPSP_CUDA_TEST_SOURCE", default_source))
-    extension_name = os.environ.get("MLPSP_CUDA_TEST_EXT_NAME", "np_tile_kernels_cuda_tests")
-    return load(name=extension_name, sources=[str(source)], verbose=False)
+    extension_name = os.environ.get(
+        "MLPSP_CUDA_TEST_EXT_NAME", "np_tile_kernels_cuda_tests_c1536_h512"
+    )
+    return load(
+        name=extension_name,
+        sources=[str(source)],
+        extra_cuda_cflags=[
+            "-DMLPSP_TILECENTER_BLOCK_THREADS=64",
+            "-DMLPSP_BACKWARD_RECOMPUTE_GEOMETRY=1",
+            "-DMLPSP_TILECENTER_MAX_HITS=512",
+            "-DMLPSP_BACKWARD_MIN_BLOCKS_PER_SM=8",
+            "-DMLPSP_MAX_TILE_PRIMS=1536",
+        ],
+        verbose=False,
+    )
 
 
 def test_public_scene_defaults_match_release_architecture():

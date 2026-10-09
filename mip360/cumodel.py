@@ -10,7 +10,9 @@ import torch.nn.functional as F
 
 try:
     from .utils.sampling import octree_sample
+    from .camera import ray_cone_candidates
 except ImportError:  # Support direct script execution.
+    from camera import ray_cone_candidates
     from utils.sampling import octree_sample
 
 
@@ -91,17 +93,35 @@ except Exception as e:  # noqa: BLE001
     _tile_error = str(e)
 
 
-def _tile_ext_build_config():
+def _tile_ext_build_config(tile_size=None):
     """Build key/name/flags for tile CUDA extension, with optional maxrregcount tuning."""
     maxrreg_raw = os.environ.get("MLPSP_NVCC_MAXRREGCOUNT", "").strip()
     extra_cuda_cflags = []
     suffix = "default"
+    # Independent of per-pixel CSR hit capacity. Keep overflow rejection enabled.
+    tile_candidates = int(os.environ.get("MLPSP_TILE_CANDIDATE_CAPACITY", "1536"))
+    if tile_candidates not in {768, 1536}:
+        raise ValueError("MLPSP_TILE_CANDIDATE_CAPACITY must be 768 or 1536")
+    if os.environ.get("MLPSP_TRAINING_BACKEND", "legacy") == "csr":
+        max_hits = int(os.environ.get("MLPSP_CSR_MAX_HITS", "128"))
+        if max_hits not in {128, 256, 512}:
+            raise ValueError("MLPSP_CSR_MAX_HITS must be 128, 256 or 512; overflow is an error")
+        extra_cuda_cflags.extend([
+            "-DMLPSP_TILECENTER_BLOCK_THREADS=64",
+            "-DMLPSP_BACKWARD_RECOMPUTE_GEOMETRY=1",
+            f"-DMLPSP_TILECENTER_MAX_HITS={max_hits}",
+            "-DMLPSP_BACKWARD_MIN_BLOCKS_PER_SM=8",
+        ])
+        suffix = f"csr_h{max_hits}"
+    if tile_candidates != 768:
+        extra_cuda_cflags.append(f"-DMLPSP_MAX_TILE_PRIMS={tile_candidates}")
+        suffix += f"_c{tile_candidates}"
     if maxrreg_raw:
         try:
             maxrreg = int(maxrreg_raw)
             if maxrreg > 0:
                 extra_cuda_cflags.append(f"-maxrregcount={maxrreg}")
-                suffix = f"rreg{maxrreg}"
+                suffix += f"_rreg{maxrreg}"
         except ValueError:
             # Ignore invalid values and fall back to default compile options.
             pass
@@ -404,6 +424,8 @@ class _TileRenderWithFeatAutogradFn(torch.autograd.Function):
         ctx.bg_color = bg_color
         ctx.gating_beta = float(gating_beta)
         ctx.gating_temp = float(gating_temp)
+        # Preserve the stop-gradient contract when either output is unused.
+        ctx.set_materialize_grads(False)
         return rgb, feat
 
     @staticmethod
@@ -415,15 +437,9 @@ class _TileRenderWithFeatAutogradFn(torch.autograd.Function):
         ext = NeuralPrimitiveSceneTileCUDA._ensure_tile_ext_static()
         B = rays_o.shape[0]
 
-        grad_positions = torch.zeros_like(positions)
-        grad_log_scales = torch.zeros_like(log_scales)
-        grad_quats = torch.zeros_like(quats)
-        grad_W1 = torch.zeros_like(W1)
-        grad_b1 = torch.zeros_like(b1)
-        grad_W2 = torch.zeros_like(W2)
-        grad_b2 = torch.zeros_like(b2)
-        grad_W3 = torch.zeros_like(W3)
-        grad_b3 = torch.zeros_like(b3)
+        # No adjoint means no optimizer update (including existing Adam momentum).
+        grad_positions = grad_log_scales = grad_quats = None
+        grad_W1 = grad_b1 = grad_W2 = grad_b2 = grad_W3 = grad_b3 = None
         grad_feat_attr = None
 
         if grad_out_rgb is not None:
@@ -519,6 +535,8 @@ class _TileRenderWithFeatPerPixelAutogradFn(torch.autograd.Function):
         ctx.bg_color = bg_color
         ctx.gating_beta = float(gating_beta)
         ctx.gating_temp = float(gating_temp)
+        # Preserve the stop-gradient contract when either output is unused.
+        ctx.set_materialize_grads(False)
         return rgb, feat
 
     @staticmethod
@@ -530,15 +548,9 @@ class _TileRenderWithFeatPerPixelAutogradFn(torch.autograd.Function):
         ext = NeuralPrimitiveSceneTileCUDA._ensure_tile_ext_static()
         B = rays_o.shape[0]
 
-        grad_positions = torch.zeros_like(positions)
-        grad_log_scales = torch.zeros_like(log_scales)
-        grad_quats = torch.zeros_like(quats)
-        grad_W1 = torch.zeros_like(W1)
-        grad_b1 = torch.zeros_like(b1)
-        grad_W2 = torch.zeros_like(W2)
-        grad_b2 = torch.zeros_like(b2)
-        grad_W3 = torch.zeros_like(W3)
-        grad_b3 = torch.zeros_like(b3)
+        # No adjoint means no optimizer update (including existing Adam momentum).
+        grad_positions = grad_log_scales = grad_quats = None
+        grad_W1 = grad_b1 = grad_W2 = grad_b2 = grad_W3 = grad_b3 = None
         grad_feat_attr = None
 
         if grad_out_rgb is not None:
@@ -794,7 +806,7 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
         return self._ensure_tile_ext_static()
 
     @staticmethod
-    def _ensure_tile_ext_static():
+    def _ensure_tile_ext_static(tile_size=None):
         global _tile_ext, _tile_ext_key
         if _tile_ext is None:
             if _tile_error is not None and _tile_error.startswith('Tile CUDA source missing'):
@@ -833,6 +845,10 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
         tile_size: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build tile->primitive sparse lists for tilecenter mode using per-tile view assignment."""
+        if getattr(self, "camera_mode", "legacy-centered") == "colmap-native":
+            # The forward call has the actual mosaic rays; a projection matrix
+            # alone cannot represent a distorted camera's tile bounds.
+            return None, None
         if self.image_size is None:
             raise ValueError("image_size must be set before building tile culling.")
         W, H = self.image_size
@@ -943,6 +959,7 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
         culled_prim_indices=None,
         tile_offsets=None,
         return_feature: bool = False,
+        feature_target=None,
     ):
         if self.image_size is None:
             raise ValueError("image_size must be set on NeuralPrimitiveSceneTileCUDA before calling forward.")
@@ -957,6 +974,12 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
         num_tiles = num_tiles_x * num_tiles_y
 
         use_external_culling = (culled_prim_indices is not None) or (tile_offsets is not None)
+        if getattr(self, "camera_mode", "legacy-centered") == "colmap-native":
+            if use_external_culling:
+                raise ValueError("Native camera culling must be derived from the actual rays")
+            culled_prim_indices, tile_offsets = ray_cone_candidates(
+                ray_o, ray_d, self.positions, self.log_scales, W, H, tile_size, score_threshold)
+            use_external_culling = True
         if use_external_culling:
             if culled_prim_indices is None or tile_offsets is None:
                 raise ValueError("Both culled_prim_indices and tile_offsets must be provided together.")
@@ -1072,6 +1095,18 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
         else:
             bg = None
 
+        if feature_target is not None:
+            if not return_feature or self.feat_attr is None or not use_tilecenter or tile_size != 8:
+                raise ValueError("CSR feature training requires tilecenter8 and direct feature attributes")
+            from .csr_training import render_training_csr
+            base = [ray_o.contiguous(), ray_d_n.contiguous(), self.positions.contiguous(),
+                    self.log_scales.contiguous(), F.normalize(self.quats, dim=-1).contiguous(),
+                    culled_prim_indices, tile_offsets.to(torch.int32), freq.contiguous(), att.contiguous(),
+                    self.W1.contiguous(), self.b1.contiguous(), self.W2.contiguous(), self.b2.contiguous(),
+                    self.W3.contiguous(), self.b3.contiguous()]
+            return render_training_csr(base, self.feat_attr.contiguous(), feature_target, W, H,
+                float(score_threshold), float(self.feature_gating_beta), float(self.feature_gating_temp), bg)
+
         if (not return_feature) or (self.feat_attr is None):
             mode = 1 if use_tilecenter else 0
             rgb = _TileRenderAutogradFn.apply(
@@ -1182,6 +1217,8 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
             rgb:   (B, 3)
             alpha: (B, 1)
         """
+        if getattr(self, "camera_mode", "legacy-centered") == "colmap-native":
+            raise NotImplementedError("Native camera statistics rendering is not implemented; use forward for RGB/features")
         if self.image_size is None:
             raise ValueError("image_size must be set on NeuralPrimitiveSceneTileCUDA before calling render_rgb_alpha_no_grad.")
         if view_matrix is None or proj_matrix is None:
@@ -1366,6 +1403,8 @@ class NeuralPrimitiveSceneTileCUDA(nn.Module):
                 t:   (B, 1) float tensor (expected depth along the *normalized* ray)
                 alpha: (B, 1) float tensor (accumulated opacity), returned for convenience
             """
+            if getattr(self, "camera_mode", "legacy-centered") == "colmap-native":
+                raise NotImplementedError("Native camera depth rendering is not implemented; use forward for RGB/features")
             if self.image_size is None:
                 raise ValueError("image_size must be set on NeuralPrimitiveSceneTileCUDA before calling render_rgb_t_no_grad.")
             if view_matrix is None or proj_matrix is None:

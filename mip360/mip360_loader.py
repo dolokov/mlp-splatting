@@ -12,6 +12,7 @@ from torchvision import transforms
 
 try:
     from .safe_io import load_checkpoint
+    from .camera import camera_rays
     from .utils.read_write_model import (
         qvec2rotmat,
         read_cameras_binary,
@@ -19,6 +20,7 @@ try:
         read_points3D_binary,
     )
 except ImportError:  # Support direct script execution.
+    from camera import camera_rays
     from safe_io import load_checkpoint
     from utils.read_write_model import (
         qvec2rotmat,
@@ -60,6 +62,26 @@ def _smart_image_sort_key(path: str):
     return (-has_num, num, base)
 
 
+def _resolve_split_offset(basedir, split_mode, split_test_offset, llffhold):
+    """Resolve explicit split settings without silently ignoring CLI arguments."""
+    hold = int(llffhold)
+    if hold <= 0:
+        raise ValueError("llffhold must be positive")
+    mode = str(split_mode).lower()
+    if mode not in {"auto", "llff", "replica", "replica_feature3dgs", "scannet_feature3dgs"}:
+        raise ValueError(f"Unknown split_mode: {split_mode}")
+    if split_test_offset is not None:
+        offset = int(split_test_offset)
+        if not 0 <= offset < hold:
+            raise ValueError("split_test_offset must lie in [0, llffhold)")
+        return offset
+    if mode == "auto":
+        scene = os.path.basename(os.path.normpath(basedir))
+        parent = os.path.basename(os.path.dirname(os.path.normpath(basedir)))
+        return 2 % hold if parent in {"data_scannet", "data_replica"} or re.fullmatch(r"scene\d{4}_\d{2}", scene) else 0
+    return 0 if mode == "llff" else 2 % hold
+
+
 class mip360Dataset(Dataset):
     def __init__(
         self,
@@ -73,11 +95,18 @@ class mip360Dataset(Dataset):
         feature_cache_size: int = 16,
         feature_resize_to_image: bool = False,
         ray_cache_size: int = 8,
+        split_mode: str = "llff",
+        split_test_offset: int | None = None,
+        camera_mode: str = "legacy-centered",
     ):
         self.basedir = basedir
+        self.camera_mode = str(camera_mode)
+        self._native_dirs = None
         self.transform = transforms.ToTensor()
         self.llffhold = llffhold
         self.split = split
+        self.split_mode = str(split_mode)
+        self.split_test_offset = _resolve_split_offset(basedir, split_mode, split_test_offset, llffhold)
         self.feature_type = str(feature_type).lower()
         self.feature_dir = feature_dir
         self.preload_features = bool(preload_features)
@@ -95,7 +124,8 @@ class mip360Dataset(Dataset):
         colmap_dir = os.path.join(self.basedir, "sparse/0")
         images = read_images_binary(os.path.join(colmap_dir, "images.bin"))
         cameras = read_cameras_binary(os.path.join(colmap_dir, "cameras.bin"))
-        intrinsics_by_base = validated_camera_intrinsics_by_image(images, cameras)
+        intrinsics_by_base = validated_camera_intrinsics_by_image(images, cameras, camera_mode=self.camera_mode)
+        self.camera_intrinsics = next(iter(intrinsics_by_base.values()))
 
         # Load images from disk with a numeric-suffix-aware order (e.g., image_2 before image_10).
         if factor == 1:
@@ -125,7 +155,7 @@ class mip360Dataset(Dataset):
             c2w[:3, 3] = -R.T @ t
             pose_by_base[base] = c2w[:3, :4]
 
-            # Validation above guarantees one centered, undistorted calibration.
+            # One shared calibration; native rays use its complete parameters.
             intrinsics = intrinsics_by_base[base]
             H = int(intrinsics["height"])
             W = int(intrinsics["width"])
@@ -217,7 +247,7 @@ class mip360Dataset(Dataset):
 
         # === Train/test split following llffhold convention ===
         num_images = self.images.shape[0]
-        i_test = np.arange(num_images)[::self.llffhold]
+        i_test = np.arange(self.split_test_offset, num_images, self.llffhold)
         i_train = np.array([i for i in range(num_images) if i not in i_test])
 
 
@@ -248,7 +278,7 @@ class mip360Dataset(Dataset):
             # keep parity with dataset length if something goes wrong
             self.image_paths_selected = []
 
-        print(f"Loaded {len(self.images)} images from {image_dir} (matched from {len(self.image_paths)} total).")
+        print(f"Loaded {len(self.images)} images from {image_dir} (matched from {len(self.image_paths)} total; test_offset={self.split_test_offset}).")
 
 
     def __len__(self):
@@ -354,6 +384,16 @@ class mip360Dataset(Dataset):
 
     def _get_rays(self, img_hw, c2w):
         H, W = img_hw
+        if self.camera_mode == "colmap-native":
+            if self._native_dirs is None:
+                c = self.camera_intrinsics
+                sx, sy = W / c["width"], H / c["height"]
+                params = [c["fx"]*sx, c["fy"]*sy, c["cx"]*sx, c["cy"]*sy, *c["distortion"]]
+                self._native_dirs = camera_rays(H, W, params)
+            if self._native_dirs.shape[:2] != (H, W):
+                raise ValueError("Native ray cache does not match image dimensions")
+            rays_d = torch.sum(self._native_dirs[..., None, :] * c2w[:3, :3], -1)
+            return c2w[:3, 3].expand_as(rays_d), rays_d
         i, j = torch.meshgrid(torch.arange(W), torch.arange(H), indexing="xy")
 
         dirs = torch.stack([

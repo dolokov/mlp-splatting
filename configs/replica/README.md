@@ -1,28 +1,31 @@
-# Replica recipes
+# Replica configurations
 
-`room0_lseg.json` is the primary release recipe. It uses the paper's `m=10`
-octree setting, initializes exactly 2,398 primitives, and evaluates the
-feature-aware tile-center renderer at an 8×8 tile size and a `5e-3` score
-threshold. The released checkpoint reaches 36.2243 dB on the ten-view
-Feature-3DGS split, within 0.006 dB of the paper's 36.23 dB room0 result.
+The four scene configurations use m=4 octree initialization and the same
+training settings: seed 2025, 60,000 iterations, constant learning rates,
+8×8 tile-center rendering, four-view mosaics, and 512D LSeg features.
 
-`room0_lseg_fast.json` is retained only as the compact `m=20` ablation:
-1,344 primitives and a 35.88 dB paper target. It is not the main-table
-reproduction.
+| Configuration | Training views | Excluded training images |
+|---|---:|---|
+| `room0_lseg.json` | 70 | None |
+| `room1_lseg.json` | 69 | `rgb_009.png` |
+| `office3_lseg.json` | 70 | None |
+| `office4_lseg.json` | 63 | `rgb_102.png`, `rgb_108.png` |
 
-The paper specifies 60k iterations, 8×8 tiles, four-view mosaics, four
-directional 512D feature slots, and learning rates of `1e-2` for log-scale,
-`1e-4` for position, and `1e-3` otherwise. Historical training checkpoints
-parameterize the four effective slots as a shared base plus four residual
-tensors (`feature_slots=5`). Release checkpoints fold these losslessly into
-four direct tensors for inference.
+Exclusions apply after the Feature-3DGS split (`llffhold=8`, offset 2).
+Every scene retains all 10 test views. No image files are deleted.
 
-The paper does not specify every implementation value. These recipes therefore
-freeze the recovered implementation defaults: seed 2025, DSSIM weight 0.1,
-attenuated-phase encoding with `sigma=0.01`, and feature-gate constants
-`beta=1.5` and temperature `2.0`.
+Training uses record-based CUDA forward/backward computation, FP16 MLP
+operands, FP32 Adam state, and a tile candidate capacity of 1,536.
+Capacity overflow raises an error. The RGB loss is 0.9 L1 + 0.1 DSSIM;
+feature distillation uses L1 loss. Features use a shared base plus four
+directional residual tensors (`feature_slots=5`).
+Feature loss updates feature attributes; geometry and appearance remain
+RGB-supervised.
 
-Feature supervision has a deliberately narrow gradient path in this release:
-the feature loss updates feature attributes and the decoder, while primitive
-geometry, opacity, and appearance remain RGB-supervised. See the root README
-for the benchmark protocol and exact reproduction scope.
+Learning rates are `1e-2` for log-scale, `1e-4` for position, and
+`1e-3` for the other parameters. Quaternion parameters are normalized
+after each optimizer step and during the forward pass.
+
+Train and evaluate with the same configuration. Command-line arguments
+override its values. Paths to datasets, checkpoints, and outputs are supplied
+on the command line.

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 import inspect
-import math
 import os
+import json
 import re
 import threading
 from tqdm import tqdm
@@ -22,41 +22,18 @@ USE_WANDB = wandb is not None and os.environ.get("MLPSP_WANDB", "0") == "1"
 
 try:
     from .mip360_loader import mip360Dataset
+    from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from .safe_io import load_checkpoint
     from .feature_decoder import FeatureUpsampleDecoder
     from .checkpoints import normalize_scene_state_dict, split_checkpoint
     from .utils.loss_utils import ssim
 except ImportError:  # Support `python mip360/run.py`.
+    from camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from safe_io import load_checkpoint
     from mip360_loader import mip360Dataset
     from feature_decoder import FeatureUpsampleDecoder
     from checkpoints import normalize_scene_state_dict, split_checkpoint
     from utils.loss_utils import ssim
-
-
-def _barf_frequency_weights(alpha: float, num_frequencies: int, device: torch.device | str) -> torch.Tensor:
-    """BARF-style smooth frequency ramp weights."""
-    if num_frequencies <= 0:
-        return torch.empty(0, dtype=torch.float32, device=device)
-    k = torch.arange(num_frequencies, dtype=torch.float32, device=device)
-    x = torch.clamp(torch.tensor(float(alpha), dtype=torch.float32, device=device) - k, 0.0, 1.0)
-    return 0.5 * (1.0 - torch.cos(torch.pi * x))
-
-
-def _set_scene_frequency_weights(scene: nn.Module, weights: torch.Tensor):
-    encoder = getattr(scene, "encoder", None)
-    if encoder is None:
-        return
-    if hasattr(encoder, "set_runtime_frequency_weights"):
-        encoder.set_runtime_frequency_weights(weights)
-
-
-def _build_mock_feature_projection(out_dim: int, device: torch.device | str) -> torch.Tensor:
-    g = torch.Generator(device="cpu")
-    g.manual_seed(12345)
-    proj = torch.randn(3, out_dim, generator=g, dtype=torch.float32)
-    proj = proj / (proj.norm(dim=0, keepdim=True) + 1e-12)
-    return proj.to(device=device)
 
 
 def _is_scannet_scene_path(scene_dir: str) -> bool:
@@ -331,6 +308,8 @@ def _load_resume_state(
     raw = load_checkpoint(resume_ckpt)
     if not isinstance(raw, dict):
         raise TypeError(f"Unsupported checkpoint type at {resume_ckpt}")
+    if checkpoint_camera_mode(raw) != getattr(scene, "camera_mode", "legacy-centered"):
+        raise ValueError("Cannot resume using a different camera model; start a new training run")
     checkpoint_view = split_checkpoint(raw)
     normalized_scene_state = normalize_scene_state_dict(
         checkpoint_view.scene_state_dict
@@ -831,15 +810,8 @@ def train_scene_llff(
     tile_size: int = 8,
     resume_ckpt: str | None = None,
     run_tag: str | None = None,
-    enable_pe_ramp: bool = False,
-    pe_ramp_start: int = 0,
-    pe_ramp_steps: int = 50000,
-    enable_center_lr_warmup: bool = False,
-    center_lr_warmup_steps: int = 5000,
-    center_lr_start_factor: float = 0.1,
     tile_mosaic: bool = True,
     tile_mosaic_k_views: int = 4,
-    tile_mosaic_warmup_steps: int = 0,
     feature_type: str = "none",
     feature_dir: str | None = None,
     feature_loss_weight: float = 1.0,
@@ -848,16 +820,9 @@ def train_scene_llff(
     feature_slots: int = 4,
     feature_gating_beta: float = 1.5,
     feature_gating_temp: float = 2.0,
-    feature_mock_from_rgb: bool = False,
     lambda_dssim: float = 0.1,
     black_border_mask: str = "auto",
     black_border_threshold: float = 1e-3,
-    late_cosine_start: int = 80000,
-    late_cosine_total_steps: int = 110000,
-    late_cosine_min_mlp: float = 1e-2,
-    late_cosine_min_scale: float = 0.2,
-    late_cosine_min_position: float = 0.3,
-    late_cosine_min_extra: float = 0.2,
     log_scale_lr: float = 1e-2,
     log_scale_min: float = -12.0,
     log_scale_max: float = 4.0,
@@ -876,7 +841,12 @@ def train_scene_llff(
     tile_mosaic_prefetch_workers: int = 2,
     tile_mosaic_prefetch_depth: int = 2,
     tile_mosaic_prefetch_cache_size: int = 0,
+    camera_mode: str = "legacy-centered",
 ):
+    if camera_mode not in {"legacy-centered", "colmap-native"}:
+        raise ValueError(f"Unknown camera_mode={camera_mode!r}")
+    if camera_mode == "colmap-native" and dataset_name != "mip360":
+        raise ValueError("Native camera training currently requires the mip360 COLMAP loader")
     def _nvtx_range(msg: str):
         class _NVTX:
             def __enter__(self_inner):
@@ -993,10 +963,10 @@ def train_scene_llff(
         else:
             print(f"[Feature] Decoder disabled (low_dim == gt_dim == {feature_dim_gt})")
 
-    use_mock_feature = False
     resolved_dataset_class = mip360Dataset if dataset_class is None else dataset_class
     dataset_kwargs = {
         "basedir": data_dir,
+        "camera_mode": camera_mode,
         "factor": factor,
         "llffhold": int(llffhold),
         "split": "train",
@@ -1009,27 +979,18 @@ def train_scene_llff(
         "feature_resize_to_image": False,
         "ray_cache_size": int(ray_cache_size),
     }
-    try:
-        dataset = resolved_dataset_class(
-            **_filter_kwargs_for_callable(resolved_dataset_class.__init__, dataset_kwargs)
-        )
-    except (FileNotFoundError, KeyError, ValueError) as exc:
-        if use_feature_metric and feature_mock_from_rgb:
-            print(f"[Feature] {exc}")
-            print("[Feature] Falling back to RGB-projected mock features for pipeline verification.")
-            fallback_kwargs = dict(dataset_kwargs)
-            fallback_kwargs.update(
-                feature_type="none",
-                feature_dir=None,
-                preload_features=False,
-                feature_cache_size=0,
-            )
-            dataset = resolved_dataset_class(
-                **_filter_kwargs_for_callable(resolved_dataset_class.__init__, fallback_kwargs)
-            )
-            use_mock_feature = True
-        else:
-            raise
+    dataset = resolved_dataset_class(
+        **_filter_kwargs_for_callable(resolved_dataset_class.__init__, dataset_kwargs)
+    )
+    # Persist the resolved view identities, including training exclusions.
+    # This is provenance only; the loader has already fixed the held-out split.
+    with open(os.path.join(output_dir, "training_split_manifest.json"), "w") as split_file:
+        json.dump({"dataset": dataset_name, "split": "train",
+                   "global_indices": [int(i) for i in dataset.select_ids],
+                   "image_names": [os.path.basename(p) for p in dataset.image_paths_selected],
+                   "excluded_train_images": os.environ.get("MLPSP_EXCLUDE_TRAIN_IMAGES", "").split(",")
+                       if os.environ.get("MLPSP_EXCLUDE_TRAIN_IMAGES", "") else [],
+                   "exclusions_applied_after_periodic_split": True}, split_file, indent=2)
     if int(expected_views) > 0 and len(dataset) != int(expected_views):
         raise RuntimeError(
             f"Training split has {len(dataset)} views; expected {int(expected_views)}. "
@@ -1041,7 +1002,6 @@ def train_scene_llff(
     if tile_size not in (8, 16):
         raise ValueError("tile_cuda currently supports tile_size in {8, 16}.")
     tile_mosaic_k_views = int(max(1, tile_mosaic_k_views))
-    tile_mosaic_warmup_steps = int(max(0, tile_mosaic_warmup_steps))
     use_tile_mosaic = bool(tile_mosaic)
     if use_tile_mosaic and tile_order not in {"tilecenter", "per_pixel"}:
         raise ValueError("tile_mosaic currently supports tile_order in {'tilecenter', 'per_pixel'} only.")
@@ -1098,6 +1058,10 @@ def train_scene_llff(
         else "legacy_base_plus_four_deltas"
     ) if use_feature_metric else "none"
     scene.checkpoint_metadata = {
+        "camera_mode": str(camera_mode),
+        "camera_pixel_center": 0.5 if camera_mode == "colmap-native" else 0.0,
+        "camera_culling": "raycone-v1" if camera_mode == "colmap-native" else "legacy-screen",
+        "camera_intrinsics": getattr(dataset, "camera_intrinsics", None),
         "dataset": str(dataset_name),
         "dataset_split": "train",
         "factor": int(factor),
@@ -1110,6 +1074,10 @@ def train_scene_llff(
         "iterations": int(num_epochs),
         "seed": int(torch.initial_seed()),
         "renderer": "tile_cuda",
+        "training_backend": os.environ.get("MLPSP_TRAINING_BACKEND", "legacy"),
+        "record_forward_backend": os.environ.get("MLPSP_CSR_FORWARD_BACKEND", "scalar") if os.environ.get("MLPSP_TRAINING_BACKEND") == "csr" else "legacy",
+        "mlp_operand_precision": os.environ.get("MLPSP_CSR_MLP_PRECISION", "float16") if os.environ.get("MLPSP_TRAINING_BACKEND") == "csr" else "float32",
+        "csr_max_hits": int(os.environ.get("MLPSP_CSR_MAX_HITS", "128")),
         "tile_order": str(tile_order),
         "tile_size": int(tile_size),
         "score_threshold": 1e-3,
@@ -1135,6 +1103,10 @@ def train_scene_llff(
         "feature_loss_weight": float(feature_loss_weight),
     }
 
+    scene.camera_mode = camera_mode
+    if resume_ckpt and camera_mode == "colmap-native":
+        validate_checkpoint_calibration(load_checkpoint(resume_ckpt), dataset)
+
     feature_decoder = None
     if use_feature_decoder:
         feature_decoder = FeatureUpsampleDecoder(
@@ -1149,7 +1121,6 @@ def train_scene_llff(
         {"params": mlp_params, "lr": float(lr)},
         {"params": [scene.log_scales], "lr": float(log_scale_lr)},
         {"params": [scene.positions], "lr": 1e-4},
-        #{"params": scene.rotations, "lr": 1e-2},
     ]
     if hasattr(scene, "quats") and isinstance(getattr(scene, "quats"), torch.nn.Parameter):
         param_groups.append({"params": [scene.quats], "lr": float(lr)})
@@ -1161,7 +1132,6 @@ def train_scene_llff(
             param_groups.append({"params": feature_decoder.parameters(), "lr": float(lr)})
     optimizer = torch.optim.Adam(param_groups, lr=float(lr))
     base_group_lrs = [float(g["lr"]) for g in optimizer.param_groups]
-    base_center_lr = float(base_group_lrs[2])
     lambda_dssim = float(max(0.0, min(1.0, lambda_dssim)))
     black_border_threshold = float(max(0.0, black_border_threshold))
     black_border_mask_mode = str(black_border_mask).strip().lower()
@@ -1181,49 +1151,6 @@ def train_scene_llff(
     else:
         print(f"[Mask] Black-border loss mask disabled (mode={black_border_mask_mode})")
 
-    late_cosine_start = int(max(0, late_cosine_start))
-    late_cosine_total_steps = int(max(late_cosine_start + 1, late_cosine_total_steps))
-    late_cosine_min_mlp = float(max(0.0, min(1.0, late_cosine_min_mlp)))
-    late_cosine_min_scale = float(max(0.0, min(1.0, late_cosine_min_scale)))
-    late_cosine_min_position = float(max(0.0, min(1.0, late_cosine_min_position)))
-    late_cosine_min_extra = float(max(0.0, min(1.0, late_cosine_min_extra)))
-    group_min_mults = []
-    for gi in range(len(base_group_lrs)):
-        if gi == 0:
-            group_min_mults.append(late_cosine_min_mlp)
-        elif gi == 1:
-            group_min_mults.append(late_cosine_min_scale)
-        elif gi == 2:
-            group_min_mults.append(late_cosine_min_position)
-        else:
-            group_min_mults.append(late_cosine_min_extra)
-
-    def _late_cosine_multiplier(step: int, min_mult: float) -> float:
-        if step < late_cosine_start:
-            return 1.0
-        t = float(step - late_cosine_start) / float(max(1, late_cosine_total_steps - late_cosine_start))
-        t = max(0.0, min(1.0, t))
-        return float(min_mult + 0.5 * (1.0 - min_mult) * (1.0 + math.cos(math.pi * t)))
-
-    def _apply_late_cosine_lrs(step: int):
-        for gi, group in enumerate(optimizer.param_groups):
-            group["lr"] = float(base_group_lrs[gi]) * _late_cosine_multiplier(step, group_min_mults[gi])
-
-    center_lr_start_factor = float(max(1e-6, min(1.0, center_lr_start_factor)))
-    pe_ramp_start = int(max(0, pe_ramp_start))
-    pe_ramp_steps = int(max(1, pe_ramp_steps))
-    center_lr_warmup_steps = int(max(1, center_lr_warmup_steps))
-
-    if enable_pe_ramp:
-        print(
-            f"[PE Ramp] Enabled: start={pe_ramp_start}, steps={pe_ramp_steps}, "
-            f"num_freq={getattr(scene.encoder, 'num_frequencies', 'unknown')}"
-        )
-    if enable_center_lr_warmup:
-        print(
-            f"[Center LR Warmup] Enabled: base_lr={base_center_lr:.6g}, "
-            f"start_factor={center_lr_start_factor:.4f}, steps={center_lr_warmup_steps}"
-        )
     print(
         f"[Stability] log_scale_lr={log_scale_lr:.6g}, "
         f"log_scale_clamp=[{log_scale_min:.6g}, {log_scale_max:.6g}], "
@@ -1231,10 +1158,7 @@ def train_scene_llff(
         f"renorm_quats_after_step={renorm_quats_after_step}, "
         f"sanitize_nonfinite_params={sanitize_nonfinite_params}"
     )
-    print(
-        f"[LR] Late-cosine enabled: start={late_cosine_start}, total_steps={late_cosine_total_steps}, "
-        f"group_min_mults={group_min_mults}"
-    )
+    print(f"[LR] Constant learning rates: {base_group_lrs}")
 
     start_epoch = 0
     optimizer_resumed = False
@@ -1271,6 +1195,10 @@ def train_scene_llff(
         )
 
 
+    # Restoring an optimizer must retain the configured constant learning rates.
+    for group, configured_lr in zip(optimizer.param_groups, base_group_lrs):
+        group["lr"] = configured_lr
+
     if USE_WANDB:
         wandb.init(
             project="mlp-splatting",
@@ -1284,15 +1212,8 @@ def train_scene_llff(
                 "hidden_dim": 32,
                 "pe_frequencies": 6,
                 "num_layers": 2,
-                "enable_pe_ramp": bool(enable_pe_ramp),
-                "pe_ramp_start": int(pe_ramp_start),
-                "pe_ramp_steps": int(pe_ramp_steps),
-                "enable_center_lr_warmup": bool(enable_center_lr_warmup),
-                "center_lr_warmup_steps": int(center_lr_warmup_steps),
-                "center_lr_start_factor": float(center_lr_start_factor),
                 "tile_mosaic": bool(use_tile_mosaic),
                 "tile_mosaic_k_views": int(tile_mosaic_k_views),
-                "tile_mosaic_warmup_steps": int(tile_mosaic_warmup_steps),
                 "tile_mosaic_tile_size": int(tile_size),
                 "feature_type": feature_type,
                 "feature_metric_enabled": bool(use_feature_metric),
@@ -1305,12 +1226,6 @@ def train_scene_llff(
                 "feature_decoder_hidden_dim": int(feature_decoder_hidden_dim),
                 "feature_loss_weight": float(feature_loss_weight),
                 "lambda_dssim": float(lambda_dssim),
-                "late_cosine_start": int(late_cosine_start),
-                "late_cosine_total_steps": int(late_cosine_total_steps),
-                "late_cosine_min_mlp": float(late_cosine_min_mlp),
-                "late_cosine_min_scale": float(late_cosine_min_scale),
-                "late_cosine_min_position": float(late_cosine_min_position),
-                "late_cosine_min_extra": float(late_cosine_min_extra),
                 "preload_features": bool(preload_features),
                 "feature_cache_size": int(feature_cache_size),
                 "ray_cache_size": int(ray_cache_size),
@@ -1336,11 +1251,10 @@ def train_scene_llff(
         engine == "tile_cuda"
         and use_tile_mosaic
         and int(tile_mosaic_k_views) > 1
-        and int(tile_mosaic_warmup_steps) == 0
         and int(dataloader_num_workers) > 0
     ):
         print(
-            "[DataLoader] tile_mosaic(k>1, warmup=0): override num_workers "
+            "[DataLoader] tile_mosaic(k>1): override num_workers "
             f"{int(dataloader_num_workers)} -> 0 (fast path is not consumed)."
         )
         dataloader_num_workers = 0
@@ -1376,9 +1290,6 @@ def train_scene_llff(
     printed_batch = False
     timing_enabled = os.environ.get("MLPSP_TIMING", "0") == "1"
     timing_every = int(os.environ.get("MLPSP_TIMING_EVERY", "50"))
-    mock_feature_proj = None
-    if use_feature_metric and use_mock_feature:
-        mock_feature_proj = _build_mock_feature_projection(feature_dim_gt, device=device)
     tile_view_cache = OrderedDict()
     tile_feature_prefetcher = None
     tile_mosaic_view_plan = deque()
@@ -1386,7 +1297,6 @@ def train_scene_llff(
     if (
         use_tile_mosaic
         and use_feature_metric
-        and (not use_mock_feature)
         and bool(tile_mosaic_feature_prefetch)
         and getattr(dataset, "features", None) is None
         and getattr(dataset, "_feature_paths", None) is not None
@@ -1411,7 +1321,7 @@ def train_scene_llff(
             warmup_ids.extend(int(i) for i in planned_ids.tolist())
         tile_feature_prefetcher.prefetch(warmup_ids)
 
-    mosaic_include_feature = bool(use_feature_metric and (not use_mock_feature))
+    mosaic_include_feature = bool(use_feature_metric)
     tile_mosaic_cpu_overlap = bool(
         engine == "tile_cuda"
         and use_tile_mosaic
@@ -1462,12 +1372,21 @@ def train_scene_llff(
             "[Pipeline] tile_mosaic CPU lookahead enabled "
             "(set MLPSP_TILE_MOSAIC_CPU_OVERLAP=0 to disable)."
         )
-        initial_use_mosaic = bool(start_epoch >= tile_mosaic_warmup_steps)
+        initial_use_mosaic = use_tile_mosaic
         initial_k = min(tile_mosaic_k_views, len(dataset))
         if initial_use_mosaic and initial_k > 1:
             init_view_ids = _next_mosaic_view_ids(initial_k)
             tile_mosaic_cpu_future = tile_mosaic_cpu_executor.submit(_build_mosaic_cpu_batch, init_view_ids)
 
+
+    training_backend = os.environ.get("MLPSP_TRAINING_BACKEND", "legacy")
+    if training_backend not in {"legacy", "csr"}:
+        raise ValueError("MLPSP_TRAINING_BACKEND must be legacy or csr")
+    csr_backend = training_backend == "csr"
+    if csr_backend:
+        if engine != "tile_cuda" or tile_size != 8 or not use_feature_metric or feature_decoder is not None or use_black_border_mask:
+            raise ValueError("CSR training requires tilecenter8, direct feature supervision, and black-border mask off")
+        print("[Training] CSR / grouped GEMM / streamed feature L1; FP32 master weights, Adam, geometry and compositing.")
 
     for epoch in tqdm(range(start_epoch, num_epochs), initial=start_epoch, total=num_epochs):
         wall_start = time.perf_counter() if timing_enabled and (epoch % timing_every == 0) else None
@@ -1476,27 +1395,8 @@ def train_scene_llff(
         bg_color = torch.rand(3, device=device)
         feat_gt_hwc = None
 
-        # (0) Late-cosine LR schedule.
-        _apply_late_cosine_lrs(epoch)
-
-        # (1) BARF-style PE frequency ramp.
-        if enable_pe_ramp and hasattr(scene, "encoder") and hasattr(scene.encoder, "num_frequencies"):
-            if epoch < pe_ramp_start:
-                alpha = 0.0
-            else:
-                progress = min(1.0, float(epoch - pe_ramp_start) / float(pe_ramp_steps))
-                alpha = progress * float(scene.encoder.num_frequencies)
-            freq_weights = _barf_frequency_weights(alpha, int(scene.encoder.num_frequencies), device=scene.positions.device)
-            _set_scene_frequency_weights(scene, freq_weights)
-
-        # (2) Center(position) LR warmup.
-        if enable_center_lr_warmup:
-            warmup_progress = min(1.0, float(epoch) / float(center_lr_warmup_steps))
-            lr_scale = center_lr_start_factor + (1.0 - center_lr_start_factor) * warmup_progress
-            optimizer.param_groups[2]["lr"] = float(optimizer.param_groups[2]["lr"]) * lr_scale
-
         if engine == "tile_cuda":
-            use_mosaic_step = use_tile_mosaic and (epoch >= tile_mosaic_warmup_steps)
+            use_mosaic_step = use_tile_mosaic
             effective_k = min(tile_mosaic_k_views, len(dataset))
             if use_mosaic_step and effective_k > 1:
                 # Build full-frame rays/GT by stitching tiles from up to k random views.
@@ -1512,7 +1412,6 @@ def train_scene_llff(
                     next_use_mosaic = bool(
                         (epoch + 1) < num_epochs
                         and use_tile_mosaic
-                        and ((epoch + 1) >= tile_mosaic_warmup_steps)
                     )
                     next_k = min(tile_mosaic_k_views, len(dataset))
                     if next_use_mosaic and next_k > 1:
@@ -1550,8 +1449,6 @@ def train_scene_llff(
                 rgbs_batch = img_hw3.reshape(-1, 3).to(device, non_blocking=True)
                 if feat_hwc_mosaic is not None:
                     feat_gt_hwc = feat_hwc_mosaic.to(device, non_blocking=True)
-                elif use_feature_metric and use_mock_feature:
-                    feat_gt_hwc = torch.matmul(rgbs_batch, mock_feature_proj).view(Himg, Wimg, feature_dim_gt)
                 else:
                     feat_gt_hwc = None
 
@@ -1574,7 +1471,7 @@ def train_scene_llff(
                 except StopIteration:
                     tile_data_iter = iter(tile_dataloader)
                     sample = next(tile_data_iter)
-                if use_feature_metric and (not use_mock_feature):
+                if use_feature_metric:
                     rays_o_hw, rays_d_hw, img_hw3, feat_hwc, pose = sample
                 else:
                     rays_o_hw, rays_d_hw, img_hw3, pose = sample
@@ -1593,9 +1490,6 @@ def train_scene_llff(
                 rgbs_batch = img_hw3.reshape(-1, 3).to(device, non_blocking=True)
                 if feat_hwc is not None:
                     feat_gt_hwc = feat_hwc.to(device, non_blocking=True)
-                elif use_feature_metric and use_mock_feature:
-                    flat_rgb = img_hw3.reshape(-1, 3).to(device, non_blocking=True)
-                    feat_gt_hwc = torch.matmul(flat_rgb, mock_feature_proj).view(Himg, Wimg, feature_dim_gt)
                 else:
                     feat_gt_hwc = None
 
@@ -1638,6 +1532,7 @@ def train_scene_llff(
             fwd_start.record()
 
         with _nvtx_range(f"train/step_{epoch}"):
+            streamed_feature_loss = None
             optimizer.zero_grad()                       # 1. Clear gradients
             if engine == "tile_cuda":
                 with _nvtx_range("train/forward_tile_cuda"):
@@ -1650,9 +1545,12 @@ def train_scene_llff(
                         culled_prim_indices=culled_prim_indices,
                         tile_offsets=tile_offsets,
                         return_feature=bool(use_feature_metric),
+                        feature_target=feat_gt_hwc if csr_backend else None,
                     )
                     if use_feature_metric:
                         pred, feat_low = scene_out
+                        if csr_backend:
+                            streamed_feature_loss, feat_low = feat_low, None
                     else:
                         pred = scene_out
                         feat_low = None
@@ -1688,7 +1586,10 @@ def train_scene_llff(
             else:
                 loss_mse = F.mse_loss(pred, rgbs_batch)
             loss_feat = None
-            if use_feature_metric:
+            if use_feature_metric and streamed_feature_loss is not None:
+                loss_feat = streamed_feature_loss
+                loss = loss_rgb + float(feature_loss_weight) * loss_feat
+            elif use_feature_metric:
                 if feat_gt_hwc is None:
                     raise RuntimeError("Feature GT is missing for featuremetric training.")
                 if feat_low is None:
@@ -1723,7 +1624,6 @@ def train_scene_llff(
                 else:
                     loss_feat = F.l1_loss(feat_pred_hwc, feat_gt_hwc)
                 loss = loss_rgb + float(feature_loss_weight) * loss_feat
-            #loss = F.l1_loss(pred, rgbs_batch)
 
             if wall_start is not None and torch.cuda.is_available():
                 fwd_end.record()
@@ -1795,7 +1695,7 @@ def train_scene_llff(
             avg_loss_scalar = float(avg_loss.item())
             avg_loss_scalar2 = float(avg_loss2.item())
             wandb_loss_scalar = float(wandb_loss.item())
-            print(f"[Epoch {epoch+1}] avg {loss_count} SME loss : {avg_loss_scalar:.6f} Semantic loss : {avg_loss_scalar2:.6f}")
+            print(f"[Epoch {epoch+1}] avg {loss_count} MSE loss : {avg_loss_scalar:.6f} Semantic loss : {avg_loss_scalar2:.6f}")
             # Reset accumulators
             loss_accum.zero_()
             loss_accum2.zero_()
@@ -1820,7 +1720,7 @@ def train_scene_llff(
                 wandb_accum.zero_()
                 loss_count = 0
 
-        # Eval after 500 epochs
+        # Save the latest training state every 500 iterations
         if (epoch + 1) % 500 == 0:
             _save_scene_with_optional_decoder(
                 os.path.join(output_dir, "scene_ckpt_tmp.pt"),
@@ -1842,10 +1742,9 @@ def train_scene_llff(
                 tile_order=tile_order,
                 output_dir=output_dir,
             )
-            #evaluate_and_visualize(data_dir, model_ckpt=scene.state_dict(), N=scene.num_primitives, device=device)
         
-        # Save at every 2000 epochs
-        if (epoch + 1) % 2000 == 0:
+        # Save the final model and optimizer state
+        if (epoch + 1) % 60000 == 0:
             ckpt_path = os.path.join(output_dir, f"scene_epoch_{epoch+1:05d}.pt")
             _save_scene_with_optional_decoder(
                 ckpt_path, scene, feature_decoder, epoch=epoch + 1

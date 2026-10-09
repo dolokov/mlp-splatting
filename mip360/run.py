@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Train the canonical tile-based MLP Splatting model."""
+"""Train the tile-based MLP Splatting model."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -67,15 +68,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of optimization iterations.",
     )
     parser.add_argument("--seed", type=int, default=2025)
+    parser.add_argument("--exclude-train-images", default=None,
+                        help="Replica only: comma-separated training image names excluded AFTER the fixed train/test split. Recorded in resolved_config.json; never changes test views.")
+    parser.add_argument("--training-backend", choices=("legacy", "csr"),
+                        default=os.environ.get("MLPSP_TRAINING_BACKEND", "legacy"))
+    parser.add_argument("--csr-forward", choices=("scalar", "wmma_fp16", "wmma_bf16"),
+                        default=os.environ.get("MLPSP_CSR_FORWARD_BACKEND", "wmma_fp16"))
+    parser.add_argument("--csr-precision", choices=("float32", "float16", "bfloat16"),
+                        default=os.environ.get("MLPSP_CSR_MLP_PRECISION", "float16"))
+    parser.add_argument("--csr-max-hits", type=int, choices=(128, 256, 512),
+                        default=int(os.environ.get("MLPSP_CSR_MAX_HITS", "128")))
+    parser.add_argument("--tile-candidate-capacity", type=int, choices=(768, 1536),
+                        default=1536, help="Maximum primitives per tile; overflow raises an error.")
+    parser.add_argument("--camera-mode", choices=("legacy-centered", "colmap-native"),
+                        default="legacy-centered", help="Opt-in native COLMAP fx/fy, principal point and OPENCV distortion.")
     parser.add_argument(
         "--max-points-per-leaf", "--min-points", "--min_points",
-        dest="max_points_per_leaf", type=int, default=10,
-        help="Octree stopping threshold m: maximum COLMAP points in each leaf.",
+        dest="max_points_per_leaf", type=int, default=None,
+        help="Octree threshold m: 4 for Replica, 10 for Mip-NeRF360 unless overridden.",
     )
     parser.add_argument("--llffhold", type=int, default=8, help="Hold out every Nth input view.")
     parser.add_argument(
         "--split-mode", "--split_mode", dest="split_mode", default="llff",
-        choices=("llff", "replica", "replica_feature3dgs", "auto"),
+        choices=("llff", "replica", "replica_feature3dgs", "scannet_feature3dgs", "auto"),
         help="Train/test split convention used by the selected dataset loader.",
     )
     parser.add_argument(
@@ -131,8 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--feature-slots", "--feature_slots", dest="feature_slots", type=int,
         choices=(4, 5), default=4,
         help=(
-            "Storage layout: four direct slots, or the paper-run-compatible "
-            "shared base plus four residuals (5 tensors)."
+            "Storage layout: four direct slots, or a shared base plus "
+            "four residuals (5 tensors)."
         ),
     )
     feature.add_argument(
@@ -202,9 +217,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> None:
+def parse_training_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parse_args_with_config(parser, argv, section="training")
+    if args.max_points_per_leaf is None:
+        args.max_points_per_leaf = 4 if args.dataset == "replica" else 10
+    if args.exclude_train_images is None:
+        scene = Path(args.data_dir).name.lower()
+        exclusions = {"room1": "rgb_009.png", "office4": "rgb_102.png,rgb_108.png"}
+        args.exclude_train_images = exclusions.get(scene, "") if args.dataset == "replica" else ""
+    if args.exclude_train_images and args.dataset != "replica":
+        parser.error("--exclude-train-images currently requires --dataset replica")
     if args.num_epochs <= 0:
         parser.error("--iterations must be positive")
     if args.max_points_per_leaf <= 0:
@@ -217,7 +240,20 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--expected-primitives cannot be negative")
     if args.feature_lowdim_divisor <= 0:
         parser.error("--feature-lowdim-divisor must be positive")
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_training_args(argv)
+    os.environ["MLPSP_EXCLUDE_TRAIN_IMAGES"] = args.exclude_train_images
+    os.environ["MLPSP_TILE_CANDIDATE_CAPACITY"] = str(args.tile_candidate_capacity)
     set_seed(args.seed)
+    os.environ["MLPSP_TRAINING_BACKEND"] = args.training_backend
+    os.environ["MLPSP_CSR_FORWARD_BACKEND"] = args.csr_forward
+    os.environ["MLPSP_CSR_MLP_PRECISION"] = args.csr_precision
+    os.environ["MLPSP_CSR_MAX_HITS"] = str(args.csr_max_hits)
+    if args.camera_mode == "colmap-native" and args.dataset != "mip360":
+        raise ValueError("--camera-mode colmap-native currently requires --dataset mip360")
 
     output_dir = Path(args.output_dir).expanduser()
     if args.tag:
@@ -231,14 +267,13 @@ def main(argv: list[str] | None = None) -> None:
         encoding="utf-8",
     )
 
-    # The public entrypoint freezes the experimental switches that accumulated
-    # during development: no PE ramp, density control, center warm-up, or late
-    # learning-rate decay.
+    # Train with constant learning rates and the configured tile mosaic.
     train_scene_llff(
         args.data_dir,
         str(Path(args.output_dir).expanduser()),
         dataset_class=_dataset_class(args.dataset),
         dataset_name=args.dataset,
+        camera_mode=args.camera_mode,
         factor=args.factor,
         llffhold=args.llffhold,
         split_mode=args.split_mode,
@@ -256,11 +291,8 @@ def main(argv: list[str] | None = None) -> None:
         tile_size=args.tile_size,
         resume_ckpt=args.resume_ckpt,
         run_tag=args.tag,
-        enable_pe_ramp=False,
-        enable_center_lr_warmup=False,
         tile_mosaic=args.tile_mosaic,
         tile_mosaic_k_views=args.tile_mosaic_k_views,
-        tile_mosaic_warmup_steps=0,
         feature_type=args.feature_type,
         feature_dir=args.feature_dir,
         feature_loss_weight=args.feature_loss_weight,
@@ -269,16 +301,9 @@ def main(argv: list[str] | None = None) -> None:
         feature_slots=args.feature_slots,
         feature_gating_beta=args.feature_gating_beta,
         feature_gating_temp=args.feature_gating_temp,
-        feature_mock_from_rgb=False,
         lambda_dssim=args.lambda_dssim,
         black_border_mask=args.black_border_mask,
         black_border_threshold=args.black_border_threshold,
-        late_cosine_start=args.num_epochs + 1,
-        late_cosine_total_steps=args.num_epochs + 2,
-        late_cosine_min_mlp=1.0,
-        late_cosine_min_scale=1.0,
-        late_cosine_min_position=1.0,
-        late_cosine_min_extra=1.0,
         log_scale_lr=args.log_scale_lr,
         log_scale_min=args.log_scale_min,
         log_scale_max=args.log_scale_max,

@@ -20,7 +20,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.10.0" "torchvision>=0.25.0"
-          python -m pip install numpy imageio Pillow tqdm ninja packaging pytest
+          python -m pip install -r requirements.txt pytest
           python -m pip install --no-deps -e .
       - name: Compile Python sources
         run: python -m compileall -q mip360 replica tools

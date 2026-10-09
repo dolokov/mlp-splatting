@@ -6,3 +6,4 @@ torch>=2.10.0
 torchvision>=0.25.0
 packaging>=23.2
 ninja>=1.11
+triton>=3.6; platform_system == "Linux"

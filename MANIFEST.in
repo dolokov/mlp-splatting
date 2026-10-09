@@ -1,2 +1,7 @@
-include LICENSE THIRD_PARTY_NOTICES.md SECURITY.md
+include README.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md CITATION.cff
+include train.py evaluate.py requirements.txt requirements-optional.txt
+recursive-include configs *.json *.md
+recursive-include scripts *.py
+recursive-include assets *.svg
+recursive-include tests *.py
 recursive-include licenses *.txt *.md
