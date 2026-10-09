@@ -1,6 +1,6 @@
 import torch
 import pytest
-from mip360.camera import camera_rays,distort_xy,undistort_xy,ray_cone_candidates
+from scannet.camera import camera_rays,distort_xy,undistort_xy,ray_cone_candidates
 
 @pytest.mark.parametrize('params',[
  [592.906,599.204,320,240,-.0136426,.0401939,.0009821,-.0007264],
@@ -49,7 +49,7 @@ def test_reject_mixed_origins_within_tile():
 
 def test_native_camera_validation_is_opt_in():
     from types import SimpleNamespace
-    from mip360.data_validation import parse_supported_camera
+    from scannet.data_validation import parse_supported_camera
     cam = SimpleNamespace(model='OPENCV', width=640, height=480,
                           params=[1023.,451.,320.,240.,-.13,.08,.019,.044])
     with pytest.raises(ValueError, match='Unsupported COLMAP camera model'):
@@ -59,7 +59,7 @@ def test_native_camera_validation_is_opt_in():
 
 
 def test_metadata_defaults_do_not_reinterpret_legacy_checkpoints():
-    from mip360.camera import checkpoint_camera_mode
+    from scannet.camera import checkpoint_camera_mode
     assert checkpoint_camera_mode({}) == 'legacy-centered'
     for metadata in [{'camera_mode': 'unknown'}, {'camera_mode': 'colmap-native'}]:
         with pytest.raises(ValueError):
@@ -68,7 +68,7 @@ def test_metadata_defaults_do_not_reinterpret_legacy_checkpoints():
 
 def test_calibration_mismatch_fails_closed():
     from types import SimpleNamespace
-    from mip360.camera import validate_checkpoint_calibration
+    from scannet.camera import validate_checkpoint_calibration
     intr = {'model': 'OPENCV', 'fx': 1023., 'fy': 451., 'distortion': [-.13,.08,.019,.044]}
     checkpoint = {'metadata': {'camera_mode': 'colmap-native', 'camera_pixel_center': .5,
                   'camera_culling': 'raycone-v1', 'camera_intrinsics': intr}}
@@ -80,8 +80,8 @@ def test_calibration_mismatch_fails_closed():
 
 
 def test_native_loader_scales_both_focals_and_principal_point():
-    from mip360.mip360_loader import mip360Dataset
-    ds = mip360Dataset.__new__(mip360Dataset)
+    from scannet.scannet_loader import SceneDataset
+    ds = SceneDataset.__new__(SceneDataset)
     ds.camera_mode = 'colmap-native'
     ds._native_dirs = None
     ds.camera_intrinsics = {'width': 8, 'height': 6, 'fx': 20., 'fy': 40.,
@@ -103,7 +103,7 @@ def test_no_hit_and_camera_inside_sphere():
 
 @pytest.mark.parametrize('method', ['render_rgb_alpha_no_grad', 'render_rgb_t_no_grad'])
 def test_unsupported_native_analysis_helpers_fail_closed(method):
-    from mip360.cumodel import NeuralPrimitiveSceneTileCUDA
+    from scannet.cumodel import NeuralPrimitiveSceneTileCUDA
     scene = NeuralPrimitiveSceneTileCUDA(num_primitives=1)
     scene.camera_mode = 'colmap-native'
     with pytest.raises(NotImplementedError, match='Native camera'):

@@ -5,7 +5,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("triton")
-from mip360 import primitive_gemm as gemm
+from scannet import primitive_gemm as gemm
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +79,7 @@ def test_prepared_groups_reject_float_segment_size():
 
 
 def test_feature_consumer_rejects_mismatched_layout_before_launch():
-    from mip360.record_feature_loss import feature_weight_gradients
+    from scannet.record_feature_loss import feature_weight_gradients
     csr = _csr([1])
     groups = gemm.prepare_groups(csr, 512)
     records = (None, None, torch.zeros(1, dtype=torch.int32), csr.x6,

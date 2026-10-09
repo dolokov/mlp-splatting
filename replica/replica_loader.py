@@ -11,8 +11,8 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 try:
-    from mip360.safe_io import load_checkpoint
-    from mip360.utils.read_write_model import (
+    from scannet.safe_io import load_checkpoint
+    from scannet.utils.read_write_model import (
         qvec2rotmat,
         read_cameras_binary,
         read_images_binary,
@@ -28,7 +28,7 @@ except ImportError:
     )
 
 try:
-    from mip360.data_validation import (
+    from scannet.data_validation import (
         infer_feature_layout,
         normalize_feature_stem,
         select_feature_payload,
@@ -84,7 +84,7 @@ def _parse_excluded_train_images_env() -> list[str]:
     return out
 
 
-class mip360Dataset(Dataset):
+class SceneDataset(Dataset):
     def __init__(
         self,
         basedir,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from mip360.utils.loss_utils import l1_loss, l2_loss, ssim
+from scannet.utils.loss_utils import l1_loss, l2_loss, ssim
 
 
 def test_basic_losses_and_identical_image_ssim():

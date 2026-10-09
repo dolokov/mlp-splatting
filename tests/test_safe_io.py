@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from mip360.safe_io import load_checkpoint, require_supported_torch
+from scannet.safe_io import load_checkpoint, require_supported_torch
 from tools.convert_legacy_checkpoint import _load
 
 
@@ -29,7 +29,7 @@ class UnsupportedObject:
 def test_custom_object_rejected_without_fallback(tmp_path, loader):
     path = tmp_path / 'object.pt'
     torch.save(UnsupportedObject(), path)
-    with patch('mip360.safe_io.torch.load', wraps=torch.load) as observed:
+    with patch('scannet.safe_io.torch.load', wraps=torch.load) as observed:
         with pytest.raises(ValueError, match='Restricted checkpoint'):
             loader(path)
         assert observed.call_count == 1
@@ -61,13 +61,13 @@ def test_loader_does_not_mutate_allowlist(tmp_path):
 def test_runtime_loads_cannot_bypass_wrapper():
     root = Path(__file__).resolve().parents[1]
     direct = []
-    for folder in ('mip360', 'replica', 'tools', 'scripts'):
+    for folder in ('scannet', 'replica', 'tools', 'scripts'):
         for path in (root / folder).rglob('*.py'):
             for node in ast.walk(ast.parse(path.read_text(encoding='utf8'))):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == 'torch'
                     and node.func.attr == 'load'):
                     direct.append((path.relative_to(root).as_posix(), node))
-    assert len(direct) == 1 and direct[0][0] == 'mip360/safe_io.py'
+    assert len(direct) == 1 and direct[0][0] == 'scannet/safe_io.py'
     assert any(k.arg == 'weights_only' and isinstance(k.value, ast.Constant) and k.value.value is True
                for k in direct[0][1].keywords)

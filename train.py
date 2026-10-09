@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Public training entrypoint."""
 
-from mip360.run import main
+from scannet.run import main
 
 
 if __name__ == "__main__":

@@ -23,8 +23,8 @@ def test_full_candidate_tail_and_gradients(tile_ext, n):
         data['grad_rgb'], data['grad_t'])
     for actual, expected in zip((gp, gs, gq), reference[6:]):
         torch.testing.assert_close(actual, expected, atol=3e-5, rtol=5e-5)
-    from mip360.primitive_csr import group_records
-    from mip360.primitive_gemm import grouped_weight_gradients
+    from scannet.primitive_csr import group_records
+    from scannet.primitive_gemm import grouped_weight_gradients
     from test_training_wmma import WEIGHTS
     csr = group_records(records[2], records[3], d4, n, records[5])
     grads = grouped_weight_gradients(csr, data['freq'], data['attenuation'],

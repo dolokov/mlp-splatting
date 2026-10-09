@@ -82,7 +82,7 @@ def _resolve_split_offset(basedir, split_mode, split_test_offset, llffhold):
     return 0 if mode == "llff" else 2 % hold
 
 
-class mip360Dataset(Dataset):
+class SceneDataset(Dataset):
     def __init__(
         self,
         basedir,
@@ -95,7 +95,7 @@ class mip360Dataset(Dataset):
         feature_cache_size: int = 16,
         feature_resize_to_image: bool = False,
         ray_cache_size: int = 8,
-        split_mode: str = "llff",
+        split_mode: str = "scannet_feature3dgs",
         split_test_offset: int | None = None,
         camera_mode: str = "legacy-centered",
     ):

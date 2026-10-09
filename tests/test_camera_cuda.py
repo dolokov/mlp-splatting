@@ -1,8 +1,8 @@
 """Native ray-cone culling agrees with exhaustive CUDA rendering and gradients."""
 import pytest
 import torch
-from mip360.camera import camera_rays
-from mip360.cumodel import NeuralPrimitiveSceneTileCUDA
+from scannet.camera import camera_rays
+from scannet.cumodel import NeuralPrimitiveSceneTileCUDA
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mip360.utils.sampling import _collect_leaves, build_octree
+from scannet.utils.sampling import _collect_leaves, build_octree
 
 
 def test_octree_preserves_points_on_the_root_maximum_faces():

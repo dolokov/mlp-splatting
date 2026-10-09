@@ -9,7 +9,7 @@ converts features to semantic labels via CLIP text similarity, and reports:
   - FPS (render-only and render+semantic-query pipeline)
 
 Typical usage (Replica split + manual semantic PNG GT):
-  python mip360/eval_lseg_table2.py \
+  python scannet/eval_lseg_table2.py \
     --data_dir /path/to/scene \
     --scene_ckpt /path/to/scene_epoch_05000.pt \
     --dataset_loader replica \
@@ -19,7 +19,7 @@ Typical usage (Replica split + manual semantic PNG GT):
     --feature_dim_target 512
 
 Typical usage (teacher-feature proxy GT):
-  python mip360/eval_lseg_table2.py \
+  python scannet/eval_lseg_table2.py \
     --data_dir /path/to/scene \
     --scene_ckpt /path/to/scene_epoch_05000.pt \
     --dataset_loader replica \
@@ -838,13 +838,13 @@ def _build_dataset(dataset_cls, args, split: str, feature_type: str, feature_dir
 
 def _load_dataset_class(loader_name: str):
     loader_name = str(loader_name).lower()
-    if loader_name == "mip360":
+    if loader_name == "scannet":
         try:
-            from .mip360_loader import mip360Dataset
+            from .scannet_loader import SceneDataset
         except ImportError:
-            from mip360_loader import mip360Dataset
+            from scannet_loader import SceneDataset
 
-        return mip360Dataset
+        return SceneDataset
     if loader_name == "replica":
         this_dir = Path(__file__).resolve().parent
         repo_root = this_dir.parent
@@ -852,9 +852,9 @@ def _load_dataset_class(loader_name: str):
         if not replica_dir.is_dir():
             raise FileNotFoundError(f"Replica loader directory not found: {replica_dir}")
         sys.path.insert(0, str(replica_dir))
-        from replica_loader import mip360Dataset  # pylint: disable=import-error
+        from replica_loader import SceneDataset  # pylint: disable=import-error
 
-        return mip360Dataset
+        return SceneDataset
     raise ValueError(f"Unknown --dataset_loader={loader_name}")
 
 
@@ -944,7 +944,7 @@ def main():
     parser.add_argument("--data_dir", type=str, required=True, help="Scene directory.")
     parser.add_argument("--scene_ckpt", type=str, required=True, help="Scene checkpoint (.pt).")
     parser.add_argument("--decoder_ckpt", type=str, default="", help="Optional decoder checkpoint if scene feature dim != target dim.")
-    parser.add_argument("--dataset_loader", type=str, default="replica", choices=["replica", "mip360"], help="Dataset loader implementation.")
+    parser.add_argument("--dataset_loader", type=str, default="replica", choices=["replica", "scannet"], help="Dataset loader implementation.")
     parser.add_argument("--split", type=str, default="test", choices=["train", "test"], help="Dataset split to evaluate.")
     parser.add_argument("--factor", type=int, default=4, help="Image downsample factor.")
     parser.add_argument("--llffhold", type=int, default=8, help="Train/test split period.")
@@ -1002,7 +1002,7 @@ def main():
     parser.add_argument("--limit_frames", type=int, default=0, help="Evaluate only first N frames (0 means all).")
     parser.add_argument("--warmup_frames", type=int, default=1, help="Number of initial frames excluded from FPS timing.")
     parser.add_argument("--score_threshold", type=float, default=3e-3, help="Tile renderer score threshold.")
-    parser.add_argument("--min_points", type=int, default=None, help="Training octree threshold m; defaults to 4 for Replica and 10 for Mip-NeRF360.")
+    parser.add_argument("--min_points", type=int, default=None, help="Training octree threshold m; defaults to 4 for Replica and 10 for ScanNet.")
     parser.add_argument("--tile_size", type=int, default=8, choices=[8, 16], help="Tile pixel size used by scene constructor (must match training).")
     parser.add_argument(
         "--tile_order",
@@ -1043,8 +1043,8 @@ def main():
 
     camera_checkpoint = load_checkpoint(args.scene_ckpt)
     args.camera_mode = checkpoint_camera_mode(camera_checkpoint)
-    if args.camera_mode == "colmap-native" and args.dataset_loader != "mip360":
-        raise ValueError("Native camera checkpoint requires the mip360 COLMAP loader")
+    if args.camera_mode == "colmap-native" and args.dataset_loader != "scannet":
+        raise ValueError("Native camera checkpoint requires the scannet COLMAP loader")
     dataset_cls = _load_dataset_class(args.dataset_loader)
     dataset = _build_dataset(dataset_cls, args, split=args.split, feature_type="none", feature_dir=None)
     validate_checkpoint_calibration(camera_checkpoint, dataset)

@@ -1,13 +1,13 @@
 import pytest
 import torch
 from test_cuda_renderer import tile_ext,_renderer_inputs,_base_args
-from mip360.primitive_csr import group_records
+from scannet.primitive_csr import group_records
 
 
 @pytest.mark.parametrize("slots",[1,4,5])
 @pytest.mark.parametrize("size",[(1,1,1,1),(9,7,7,5),(8,8,8,8)])
 def test_streamed_l1_matches_framebuffer(tile_ext,slots,size):
-    from mip360.record_feature_loss import streaming_feature_l1,feature_weight_gradients
+    from scannet.record_feature_loss import streaming_feature_l1,feature_weight_gradients
     torch.manual_seed(482)
     torch.backends.cuda.matmul.allow_tf32=False
     w,h,wf,hf=size
@@ -53,7 +53,7 @@ def test_streamed_l1_matches_framebuffer(tile_ext,slots,size):
 @pytest.mark.parametrize("precision",["float32","float16"])
 @pytest.mark.parametrize("feature_only",[False,True])
 def test_scene_csr_autograd_contract(tile_ext,monkeypatch,precision,feature_only):
-    from mip360 import cumodel
+    from scannet import cumodel
     monkeypatch.setattr(cumodel,"_tile_ext",tile_ext)
     monkeypatch.setattr(cumodel,"_tile_ext_key",cumodel._tile_ext_build_config(8)[0])
     monkeypatch.setenv("MLPSP_CSR_MLP_PRECISION",precision)

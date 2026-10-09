@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mip360 import eval_rgb_psnr as evaluation  # noqa: E402
+from scannet import eval_rgb_psnr as evaluation  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -155,7 +155,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data", "--data-dir", "--data_dir", dest="data_dir", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True, help="Destination JSON file.")
-    parser.add_argument("--dataset-loader", choices=("replica", "mip360"), default="replica")
+    parser.add_argument("--dataset-loader", choices=("replica", "scannet"), default="replica")
     parser.add_argument("--split", choices=("train", "test"), default="test")
     parser.add_argument("--split-mode", default="replica_feature3dgs")
     parser.add_argument("--split-test-offset", type=int, default=2)
@@ -172,7 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="max_points_per_leaf",
         type=int,
         default=None,
-        help="Training octree threshold m; defaults to 4 for Replica and 10 for Mip-NeRF360.",
+        help="Training octree threshold m; defaults to 4 for Replica and 10 for ScanNet.",
     )
     parser.add_argument("--feature-gating-beta", type=float, default=None)
     parser.add_argument("--feature-gating-temp", type=float, default=None)
@@ -306,12 +306,12 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = Path(args.checkpoint).expanduser().resolve()
     device_properties = torch.cuda.get_device_properties(device)
     source_files = [
-        REPO_ROOT / "mip360/checkpoints.py",
-        REPO_ROOT / "mip360/cumodel.py",
-        REPO_ROOT / "mip360/cuda/np_tile_kernels.cu",
-        REPO_ROOT / "mip360/data_validation.py",
-        REPO_ROOT / "mip360/eval_rgb_psnr.py",
-        REPO_ROOT / "mip360/mip360_loader.py",
+        REPO_ROOT / "scannet/checkpoints.py",
+        REPO_ROOT / "scannet/cumodel.py",
+        REPO_ROOT / "scannet/cuda/np_tile_kernels.cu",
+        REPO_ROOT / "scannet/data_validation.py",
+        REPO_ROOT / "scannet/eval_rgb_psnr.py",
+        REPO_ROOT / "scannet/scannet_loader.py",
         REPO_ROOT / "replica/replica_loader.py",
         REPO_ROOT / "tools/benchmark_inference.py",
     ]

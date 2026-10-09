@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from mip360.config import parse_args_with_config
-from mip360.cumodel import _tile_ext_build_config
-from mip360.eval_rgb_psnr import build_parser as build_eval_parser
-from mip360.run import build_parser as build_train_parser, parse_training_args
+from scannet.config import parse_args_with_config
+from scannet.cumodel import _tile_ext_build_config
+from scannet.eval_rgb_psnr import build_parser as build_eval_parser
+from scannet.run import build_parser as build_train_parser, parse_training_args
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENES = {"room0": (70, 4402, ""), "room1": (69, 5134, "rgb_009.png"),
@@ -46,13 +46,32 @@ def test_replica_recipe_train_eval_identity(scene):
 @pytest.mark.parametrize("scene", SCENES)
 def test_replica_defaults_and_training_exclusions(scene):
     args = parse_training_args(["--dataset", "replica", "--data", scene])
+    assert args.split_mode == "replica_feature3dgs"
     assert args.max_points_per_leaf == 4
     assert args.exclude_train_images == SCENES[scene][2]
     assert args.tile_candidate_capacity == 1536
 
 
-def test_other_dataset_default_is_preserved():
-    assert parse_training_args(["--data", "scene"]).max_points_per_leaf == 10
+def test_scannet_defaults_and_public_dataset_choices():
+    args = parse_training_args(["--data", "scene0000_00"])
+    assert args.dataset == "scannet"
+    assert args.max_points_per_leaf == 10
+    assert args.split_mode == "scannet_feature3dgs"
+    assert args.exclude_train_images == ""
+    for parser in (build_train_parser(), build_eval_parser()):
+        dataset = next(action for action in parser._actions if "--dataset" in action.option_strings)
+        assert set(dataset.choices) == {"scannet", "replica"}
+
+
+@pytest.mark.parametrize("dataset", ("scannet", "replica"))
+def test_dataset_entrypoints_resolve_renamed_loaders(dataset):
+    from scannet.run import _dataset_class
+    from scannet.eval_rgb_psnr import _load_dataset_class as rgb_dataset_class
+    from scannet.eval_lseg_table2 import _load_dataset_class as semantic_dataset_class
+
+    classes = [_dataset_class(dataset), rgb_dataset_class(dataset), semantic_dataset_class(dataset)]
+    assert all(cls.__name__ == "SceneDataset" for cls in classes)
+    assert all(dataset in cls.__module__ for cls in classes)
 
 
 def test_cli_overrides_config():
@@ -87,9 +106,9 @@ def test_default_capacity_selects_full_kernel_build(monkeypatch):
 
 
 def test_training_entrypoint_forwards_replica_recipe(tmp_path, monkeypatch):
-    from mip360 import run
+    from scannet import run
 
-    signature = inspect.signature(run.train_scene_llff)
+    signature = inspect.signature(run.train_scene)
     captured = {}
 
     def capture(*args, **kwargs):
@@ -102,7 +121,7 @@ def test_training_entrypoint_forwards_replica_recipe(tmp_path, monkeypatch):
     # Parser defaults read the backend environment before applying the config.
     monkeypatch.setenv("MLPSP_TRAINING_BACKEND", "legacy")
     monkeypatch.setenv("MLPSP_CSR_MAX_HITS", "128")
-    monkeypatch.setattr(run, "train_scene_llff", capture)
+    monkeypatch.setattr(run, "train_scene", capture)
     monkeypatch.setattr(run, "set_seed", lambda seed: None)
     output = tmp_path / "output"
     run.main(["--config", str(ROOT / "configs/replica/room1_lseg.json"),

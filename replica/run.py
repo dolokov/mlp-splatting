@@ -12,7 +12,7 @@ def main() -> None:
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
 
-    from mip360 import run as base_run
+    from scannet import run as base_run
     base_run.main([*sys.argv[1:], "--dataset", "replica"])
 
 

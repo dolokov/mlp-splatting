@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mip360.csr_training import _record_forward
+from scannet.csr_training import _record_forward
 
 
 @pytest.mark.parametrize("value,precision", [

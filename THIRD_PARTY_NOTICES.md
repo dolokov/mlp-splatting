@@ -1,6 +1,6 @@
 # Third-party notices
 
-`mip360/utils/read_write_model.py` is based on COLMAP's Python model I/O
+`scannet/utils/read_write_model.py` is based on COLMAP's Python model I/O
 utility. Its BSD 3-Clause copyright notice, redistribution terms, and warranty
 disclaimer are retained in full at the top of that source file.
 
@@ -13,7 +13,7 @@ pretrained foundation models, or paper/project-page media.
 
 ## Structural similarity (SSIM)
 
-`mip360/utils/loss_utils.py` implements the windowed SSIM formulation used by
+`scannet/utils/loss_utils.py` implements the windowed SSIM formulation used by
 [pytorch-ssim](https://github.com/Po-Hsun-Su/pytorch-ssim), authored by Evan Su.
 We retain its MIT attribution in `licenses/pytorch-ssim-MIT.txt`. GRAPHDECO's
 Gaussian-Splatting license explicitly identifies its SSIM helper as based on

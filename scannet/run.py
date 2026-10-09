@@ -14,10 +14,10 @@ import torch
 
 try:
     from .config import parse_args_with_config
-    from .train import train_scene_llff
-except ImportError:  # Support ``python mip360/run.py``.
+    from .train import train_scene
+except ImportError:  # Support ``python scannet/run.py``.
     from config import parse_args_with_config
-    from train import train_scene_llff
+    from train import train_scene
 
 
 def set_seed(seed: int) -> None:
@@ -30,15 +30,15 @@ def set_seed(seed: int) -> None:
 
 
 def _dataset_class(name: str):
-    if name == "mip360":
+    if name == "scannet":
         try:
-            from .mip360_loader import mip360Dataset
+            from .scannet_loader import SceneDataset
         except ImportError:
-            from mip360_loader import mip360Dataset
-        return mip360Dataset
+            from scannet_loader import SceneDataset
+        return SceneDataset
     if name == "replica":
-        from replica.replica_loader import mip360Dataset
-        return mip360Dataset
+        from replica.replica_loader import SceneDataset
+        return SceneDataset
     raise ValueError(f"Unknown dataset loader: {name}")
 
 
@@ -53,8 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dataset",
-        choices=("mip360", "replica"),
-        default="mip360",
+        choices=("scannet", "replica"),
+        default="scannet",
         help="Dataset loader to use.",
     )
     parser.add_argument("--data", "--data_dir", dest="data_dir", required=True, help="Scene directory.")
@@ -85,11 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-points-per-leaf", "--min-points", "--min_points",
         dest="max_points_per_leaf", type=int, default=None,
-        help="Octree threshold m: 4 for Replica, 10 for Mip-NeRF360 unless overridden.",
+        help="Octree threshold m: 4 for Replica, 10 for ScanNet unless overridden.",
     )
     parser.add_argument("--llffhold", type=int, default=8, help="Hold out every Nth input view.")
     parser.add_argument(
-        "--split-mode", "--split_mode", dest="split_mode", default="llff",
+        "--split-mode", "--split_mode", dest="split_mode", default=None,
         choices=("llff", "replica", "replica_feature3dgs", "scannet_feature3dgs", "auto"),
         help="Train/test split convention used by the selected dataset loader.",
     )
@@ -220,6 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
 def parse_training_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parse_args_with_config(parser, argv, section="training")
+    if args.split_mode is None:
+        args.split_mode = "replica_feature3dgs" if args.dataset == "replica" else "scannet_feature3dgs"
     if args.max_points_per_leaf is None:
         args.max_points_per_leaf = 4 if args.dataset == "replica" else 10
     if args.exclude_train_images is None:
@@ -252,8 +254,8 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["MLPSP_CSR_FORWARD_BACKEND"] = args.csr_forward
     os.environ["MLPSP_CSR_MLP_PRECISION"] = args.csr_precision
     os.environ["MLPSP_CSR_MAX_HITS"] = str(args.csr_max_hits)
-    if args.camera_mode == "colmap-native" and args.dataset != "mip360":
-        raise ValueError("--camera-mode colmap-native currently requires --dataset mip360")
+    if args.camera_mode == "colmap-native" and args.dataset != "scannet":
+        raise ValueError("--camera-mode colmap-native currently requires --dataset scannet")
 
     output_dir = Path(args.output_dir).expanduser()
     if args.tag:
@@ -268,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     # Train with constant learning rates and the configured tile mosaic.
-    train_scene_llff(
+    train_scene(
         args.data_dir,
         str(Path(args.output_dir).expanduser()),
         dataset_class=_dataset_class(args.dataset),

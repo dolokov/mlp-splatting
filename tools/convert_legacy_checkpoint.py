@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mip360.checkpoints import convert_checkpoint  # noqa: E402
-from mip360.safe_io import load_checkpoint  # noqa: E402
+from scannet.checkpoints import convert_checkpoint  # noqa: E402
+from scannet.safe_io import load_checkpoint  # noqa: E402
 
 
 def _default_output(source: Path, target_slots: int) -> Path:

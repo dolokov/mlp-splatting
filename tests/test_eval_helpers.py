@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from mip360.eval_lseg_table2 import _load_decoder_if_needed
-from mip360.feature_decoder import FeatureUpsampleDecoder
+from scannet.eval_lseg_table2 import _load_decoder_if_needed
+from scannet.feature_decoder import FeatureUpsampleDecoder
 
 
 def test_lseg_eval_loads_decoder_embedded_in_scene_checkpoint(tmp_path):

@@ -89,7 +89,7 @@ Use processed scenes such as `sceneXXXX_XX/`, not raw `.sens` files. Pass these
 data options to both training and RGB evaluation:
 
 ```text
---dataset mip360 --data /path/to/ScanNet/sceneXXXX_XX --factor 1
+--dataset scannet --data /path/to/ScanNet/sceneXXXX_XX --factor 1
 --split-mode scannet_feature3dgs --llffhold 8 --split-test-offset 2
 ```
 
@@ -145,7 +145,7 @@ Use label maps, a label list, and text embeddings from the same semantic
 embedding model as the supervised features:
 
 ```bash
-python mip360/eval_lseg_table2.py \
+python scannet/eval_lseg_table2.py \
   --data_dir /path/to/Replica/room0 \
   --scene_ckpt outputs/room0/scene_epoch_60000.pt \
   --factor 1 \
@@ -168,8 +168,8 @@ teacher-generated label maps measure agreement with that teacher.
 train.py             training entrypoint
 evaluate.py          RGB evaluation entrypoint
 configs/replica/     four m=4 scene configurations
-mip360/              model, trainer, loaders, and evaluation
-mip360/cuda/         CUDA renderer and training kernels
+scannet/             ScanNet loader and shared model, trainer, evaluation
+scannet/cuda/         CUDA renderer and training kernels
 replica/             Replica loader and launcher
 scripts/             installation and package checks
 tools/               inference and checkpoint utilities

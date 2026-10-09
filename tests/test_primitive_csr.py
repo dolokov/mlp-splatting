@@ -4,7 +4,7 @@ import torch
 import os
 
 from test_cuda_renderer import tile_ext, _renderer_inputs, _base_args
-from mip360.primitive_csr import group_records, reference_weight_gradients
+from scannet.primitive_csr import group_records, reference_weight_gradients
 
 
 @pytest.mark.parametrize("hidden,frequencies", [(1, 1), (32, 6)])
@@ -59,7 +59,7 @@ def test_csr_matches_rotated_tilecenter_gradients(tile_ext, hidden, frequencies,
     for a,b in zip([d4,gp2,gs2,gq2],[grad4,gp,gs,gq]):
         torch.testing.assert_close(a,b,atol=5.e-5,rtol=5.e-5)
     if hidden == 32:
-        from mip360.primitive_gemm import grouped_weight_gradients
+        from scannet.primitive_gemm import grouped_weight_gradients
         for dtype in (torch.float32,torch.float16):
             grouped = grouped_weight_gradients(csr,data["freq"],data["attenuation"],weights,dtype=dtype)
             for a,b in zip(grouped,expected[:6]):
@@ -93,7 +93,7 @@ def test_saved_records_reject_configured_capacity_overflow(tile_ext):
 def test_grouped_gemm_vjp_matches_fp32_oracle(dtype, scale):
     if not torch.cuda.is_available():
         pytest.skip("CUDA required")
-    from mip360.primitive_gemm import grouped_weight_gradients
+    from scannet.primitive_gemm import grouped_weight_gradients
     torch.manual_seed(92)
     torch.backends.cuda.matmul.allow_tf32 = False
     counts = torch.tensor([0,1,31,32,33,511,512,513,1700,0],device="cuda")
@@ -107,7 +107,7 @@ def test_grouped_gemm_vjp_matches_fp32_oracle(dtype, scale):
     att = torch.exp(-.5*freq.square()*1.e-4)
     weights = [torch.randn((10,*shape),device="cuda")*.1 for shape in [(32,72),(32,),(32,32),(32,),(4,32),(4,)]]
     # Emulate exact FP32 activation masks saved by the record emitter.
-    from mip360.cumodel import _encode_x6
+    from scannet.cumodel import _encode_x6
     masks = torch.empty((len(ids),2),device="cuda",dtype=torch.int32)
     bit = 1 << torch.arange(32,device="cuda",dtype=torch.int64)
     for p in range(10):

@@ -203,8 +203,8 @@ def test_training_wmma_stable_depth_ties_and_divergent_early_stop(tile_ext, prec
 
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_training_wmma_masks_follow_actual_mixed_forward(tile_ext, precision):
-    from mip360.primitive_csr import group_records
-    from mip360.primitive_gemm import grouped_weight_gradients
+    from scannet.primitive_csr import group_records
+    from scannet.primitive_gemm import grouped_weight_gradients
 
     data = _case(1, 1, 1, constant=True)
     epsilon = 2. ** (-12 if precision == "float16" else -9)
@@ -258,7 +258,7 @@ def _compiled_capacity(ext, name):
         values = re.findall(r"-D\s*" + re.escape(name) + r"=(\d+)\b", build.read_text())
         if values:
             return int(values[-1])
-    default = Path(__file__).parents[1] / "mip360" / "cuda" / "np_tile_kernels.cu"
+    default = Path(__file__).parents[1] / "scannet" / "cuda" / "np_tile_kernels.cu"
     source = Path(os.environ.get("MLPSP_CUDA_TEST_SOURCE", default))
     match = re.search(r"^\s*#\s*define\s+" + re.escape(name) + r"\s+(\d+)\b",
                       source.read_text(), re.MULTILINE)
@@ -393,7 +393,7 @@ def _fp32_parameter_vjp_with_saved_masks(csr, data):
     FP32 backward option on actual WMMA records, including its actual masks;
     it does not assert that mixed forward has FP32 training trajectories.
     """
-    from mip360.cumodel import _encode_x6
+    from scannet.cumodel import _encode_x6
     weights = [data[name] for name in WEIGHTS]
     result = [torch.zeros_like(value) for value in weights]
     bits = torch.arange(32, device=csr.x6.device, dtype=torch.int64)
@@ -420,8 +420,8 @@ def _fp32_parameter_vjp_with_saved_masks(csr, data):
 @pytest.mark.parametrize("precision", PRECISIONS)
 @pytest.mark.parametrize("constant", [False, True])
 def test_training_wmma_saved_records_feed_reverse_and_grouped_parameter_vjp(tile_ext, precision, constant):
-    from mip360.primitive_csr import group_records
-    from mip360.primitive_gemm import grouped_weight_gradients
+    from scannet.primitive_csr import group_records
+    from scannet.primitive_gemm import grouped_weight_gradients
 
     torch.backends.cuda.matmul.allow_tf32 = False
     data = _case(9, 9, 7, constant=constant, mosaic=True)
@@ -456,8 +456,8 @@ def test_training_wmma_saved_records_feed_reverse_and_grouped_parameter_vjp(tile
 @pytest.mark.parametrize("precision", PRECISIONS)
 @pytest.mark.parametrize("branch", ["feature", "rgb", "joint"])
 def test_training_wmma_512d_feature_and_input_stop_gradient(tile_ext, monkeypatch, precision, branch):
-    from mip360 import cumodel
-    from mip360.csr_training import CSRTrainingFunction
+    from scannet import cumodel
+    from scannet.csr_training import CSRTrainingFunction
     from test_record_feature_512 import _record_framebuffer, _mixed_target, _resize
 
     class ForwardProxy:

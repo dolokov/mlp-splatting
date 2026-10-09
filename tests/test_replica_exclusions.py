@@ -36,8 +36,8 @@ def test_exclusions_preserve_test_identity(replica_scene, monkeypatch, excluded)
     monkeypatch.setenv("MLPSP_EXCLUDE_TRAIN_IMAGES", excluded)
     kwargs = dict(basedir=str(replica_scene), factor=1, llffhold=8,
                   split_mode="replica_feature3dgs", split_test_offset=2)
-    train = replica_loader.mip360Dataset(**kwargs, split="train")
-    test = replica_loader.mip360Dataset(**kwargs, split="test")
+    train = replica_loader.SceneDataset(**kwargs, split="train")
+    test = replica_loader.SceneDataset(**kwargs, split="test")
     excluded_names = set(excluded.split(","))
     assert test.select_ids == list(range(2, 80, 8))
     assert len(test) == 10
@@ -51,7 +51,7 @@ def test_exclusions_preserve_test_identity(replica_scene, monkeypatch, excluded)
 def test_invalid_training_exclusion_fails(replica_scene, monkeypatch, excluded):
     monkeypatch.setenv("MLPSP_EXCLUDE_TRAIN_IMAGES", excluded)
     with pytest.raises(KeyError, match="not in the train split"):
-        replica_loader.mip360Dataset(
+        replica_loader.SceneDataset(
             str(replica_scene), factor=1, split="train",
             split_mode="replica_feature3dgs", split_test_offset=2,
         )

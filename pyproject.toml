@@ -29,10 +29,10 @@ evaluation = [
 tracking = ["wandb>=0.15"]
 
 [project.scripts]
-mlpsp-train = "mip360.run:main"
+mlpsp-train = "scannet.run:main"
 mlpsp-train-replica = "replica.run:main"
-mlpsp-eval-rgb = "mip360.eval_rgb_psnr:main"
-mlpsp-eval-lseg = "mip360.eval_lseg_table2:main"
+mlpsp-eval-rgb = "scannet.eval_rgb_psnr:main"
+mlpsp-eval-lseg = "scannet.eval_lseg_table2:main"
 mlpsp-benchmark = "tools.benchmark_inference:main"
 mlpsp-convert-checkpoint = "tools.convert_legacy_checkpoint:main"
 
@@ -40,10 +40,10 @@ mlpsp-convert-checkpoint = "tools.convert_legacy_checkpoint:main"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt", "licenses/*.md"]
 
 [tool.setuptools.packages.find]
-include = ["mip360*", "replica*", "tools*"]
+include = ["scannet*", "replica*", "tools*"]
 
 [tool.setuptools.package-data]
-mip360 = ["cuda/*.cu", "cuda/*.cuh"]
+scannet = ["cuda/*.cu", "cuda/*.cuh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

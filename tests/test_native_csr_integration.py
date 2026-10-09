@@ -2,8 +2,8 @@
 import pytest
 import torch
 import torch.nn.functional as F
-from mip360.camera import camera_rays
-from mip360.cumodel import NeuralPrimitiveSceneTileCUDA
+from scannet.camera import camera_rays
+from scannet.cumodel import NeuralPrimitiveSceneTileCUDA
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='native CSR integration requires a CUDA device')

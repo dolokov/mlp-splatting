@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from mip360.checkpoints import (
+from scannet.checkpoints import (
     convert_checkpoint,
     convert_feature_slots,
     infer_scene_spec,

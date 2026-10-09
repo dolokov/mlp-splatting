@@ -23,7 +23,7 @@ jobs:
           python -m pip install -r requirements.txt pytest
           python -m pip install --no-deps -e .
       - name: Compile Python sources
-        run: python -m compileall -q mip360 replica tools
+        run: python -m compileall -q scannet replica tools
       - name: Check release hygiene
         run: python scripts/check_release.py
       - name: Run CPU tests

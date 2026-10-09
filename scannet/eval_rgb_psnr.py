@@ -3,7 +3,7 @@
 
 Supports:
 - scene checkpoints: scene_epoch_xxx.pt (model-only) or train_state_xxx.pt
-- dataset loaders: replica / mip360
+- dataset loaders: replica / scannet
 - split controls compatible with existing training/eval scripts
 """
 
@@ -114,13 +114,13 @@ def _get_frame_identity(dataset, split_idx: int) -> dict:
 
 def _load_dataset_class(loader_name: str):
     loader_name = str(loader_name).lower()
-    if loader_name == "mip360":
+    if loader_name == "scannet":
         try:
-            from .mip360_loader import mip360Dataset
+            from .scannet_loader import SceneDataset
         except ImportError:
-            from mip360_loader import mip360Dataset
+            from scannet_loader import SceneDataset
 
-        return mip360Dataset
+        return SceneDataset
     if loader_name == "replica":
         this_dir = Path(__file__).resolve().parent
         repo_root = this_dir.parent
@@ -128,9 +128,9 @@ def _load_dataset_class(loader_name: str):
         if not replica_dir.is_dir():
             raise FileNotFoundError(f"Replica loader directory not found: {replica_dir}")
         sys.path.insert(0, str(replica_dir))
-        from replica_loader import mip360Dataset  # pylint: disable=import-error
+        from replica_loader import SceneDataset  # pylint: disable=import-error
 
-        return mip360Dataset
+        return SceneDataset
     raise ValueError(f"Unknown --dataset_loader={loader_name}")
 
 
@@ -338,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str, required=True,
         help="Path to scene_epoch_xxx.pt or train_state_xxx.pt.",
     )
-    parser.add_argument("--dataset", "--dataset-loader", "--dataset_loader", dest="dataset_loader", type=str, default="replica", choices=["replica", "mip360"], help="Dataset loader implementation.")
+    parser.add_argument("--dataset", "--dataset-loader", "--dataset_loader", dest="dataset_loader", type=str, default="replica", choices=["replica", "scannet"], help="Dataset loader implementation.")
     parser.add_argument("--split", type=str, default="test", choices=["train", "test"], help="Dataset split to evaluate.")
     parser.add_argument("--factor", type=int, default=1, help="Image downsample factor used by dataset loader.")
     parser.add_argument("--llffhold", type=int, default=8, help="Train/test split period.")
@@ -398,8 +398,8 @@ def main(argv: list[str] | None = None) -> None:
 
     camera_checkpoint = load_checkpoint(args.scene_ckpt)
     args.camera_mode = checkpoint_camera_mode(camera_checkpoint)
-    if args.camera_mode == "colmap-native" and args.dataset_loader != "mip360":
-        raise ValueError("Native camera checkpoint requires the mip360 COLMAP loader")
+    if args.camera_mode == "colmap-native" and args.dataset_loader != "scannet":
+        raise ValueError("Native camera checkpoint requires the scannet COLMAP loader")
     dataset_cls = _load_dataset_class(args.dataset_loader)
     dataset = _build_dataset(dataset_cls, args)
     validate_checkpoint_calibration(camera_checkpoint, dataset)

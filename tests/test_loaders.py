@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 import torch
 
-from mip360 import data_validation, mip360_loader
+from scannet import data_validation, scannet_loader
 from replica import replica_loader
 
-LOADER_MODULES = (mip360_loader, replica_loader)
+LOADER_MODULES = (scannet_loader, replica_loader)
 
 
 def _camera(model: str, params, *, camera_id: int = 1, width: int = 638, height: int = 478):
@@ -113,7 +113,7 @@ def test_feature_layout_rejects_wrong_channel_count():
 def test_duplicate_normalized_feature_stems_are_rejected(loader_module, tmp_path):
     (tmp_path / "frame_feature.pt").touch()
     (tmp_path / "frame_fmap.npy").touch()
-    dataset = loader_module.mip360Dataset.__new__(loader_module.mip360Dataset)
+    dataset = loader_module.SceneDataset.__new__(loader_module.SceneDataset)
     dataset.image_paths = [str(tmp_path / "frame.png")]
 
     with pytest.raises(ValueError, match="Duplicate feature stem 'frame'"):
@@ -130,7 +130,7 @@ def test_layout_hint_suffix_preserves_feature_path_alignment(
 ):
     feature_path = tmp_path / f"frame_{layout_suffix}.pt"
     feature_path.touch()
-    dataset = loader_module.mip360Dataset.__new__(loader_module.mip360Dataset)
+    dataset = loader_module.SceneDataset.__new__(loader_module.SceneDataset)
     dataset.image_paths = [str(tmp_path / "frame.png")]
 
     assert dataset._build_feature_path_list(str(tmp_path)) == [str(feature_path)]
@@ -151,7 +151,7 @@ def test_ambiguous_feature_dictionary_payload_is_rejected(
     else:
         np.savez(path, **{key: value.numpy() for key, value in payload.items()})
 
-    dataset = loader_module.mip360Dataset.__new__(loader_module.mip360Dataset)
+    dataset = loader_module.SceneDataset.__new__(loader_module.SceneDataset)
     dataset.images = torch.zeros((1, 3, 8, 12))
     dataset.feature_type = "lseg"
     dataset.feature_resize_to_image = False
@@ -165,7 +165,7 @@ def test_feature_tensor_is_normalized_to_hwc(loader_module, tmp_path, layout, sh
     path = tmp_path / f"frame_{layout}.pt"
     torch.save({"feat": torch.arange(np.prod(shape)).reshape(shape)}, path)
 
-    dataset = loader_module.mip360Dataset.__new__(loader_module.mip360Dataset)
+    dataset = loader_module.SceneDataset.__new__(loader_module.SceneDataset)
     dataset.images = torch.zeros((1, 3, 8, 12))
     dataset.feature_type = "lseg"
     dataset.feature_resize_to_image = False

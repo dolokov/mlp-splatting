@@ -21,16 +21,16 @@ except ImportError:  # Experiment tracking is optional for a clean local run.
 USE_WANDB = wandb is not None and os.environ.get("MLPSP_WANDB", "0") == "1"
 
 try:
-    from .mip360_loader import mip360Dataset
+    from .scannet_loader import SceneDataset
     from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from .safe_io import load_checkpoint
     from .feature_decoder import FeatureUpsampleDecoder
     from .checkpoints import normalize_scene_state_dict, split_checkpoint
     from .utils.loss_utils import ssim
-except ImportError:  # Support `python mip360/run.py`.
+except ImportError:  # Support `python scannet/run.py`.
     from camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from safe_io import load_checkpoint
-    from mip360_loader import mip360Dataset
+    from scannet_loader import SceneDataset
     from feature_decoder import FeatureUpsampleDecoder
     from checkpoints import normalize_scene_state_dict, split_checkpoint
     from utils.loss_utils import ssim
@@ -788,14 +788,14 @@ def _sample_tile_mosaic_batch(
 
 
 
-def train_scene_llff(
+def train_scene(
     data_dir,
     output_root,
     dataset_class=None,
-    dataset_name: str = "mip360",
+    dataset_name: str = "scannet",
     factor: int = 1,
     llffhold: int = 8,
-    split_mode: str = "llff",
+    split_mode: str = "scannet_feature3dgs",
     split_test_offset: int | None = None,
     expected_views: int = 0,
     expected_primitives: int = 0,
@@ -845,8 +845,8 @@ def train_scene_llff(
 ):
     if camera_mode not in {"legacy-centered", "colmap-native"}:
         raise ValueError(f"Unknown camera_mode={camera_mode!r}")
-    if camera_mode == "colmap-native" and dataset_name != "mip360":
-        raise ValueError("Native camera training currently requires the mip360 COLMAP loader")
+    if camera_mode == "colmap-native" and dataset_name != "scannet":
+        raise ValueError("Native camera training currently requires the scannet COLMAP loader")
     def _nvtx_range(msg: str):
         class _NVTX:
             def __enter__(self_inner):
@@ -963,7 +963,7 @@ def train_scene_llff(
         else:
             print(f"[Feature] Decoder disabled (low_dim == gt_dim == {feature_dim_gt})")
 
-    resolved_dataset_class = mip360Dataset if dataset_class is None else dataset_class
+    resolved_dataset_class = SceneDataset if dataset_class is None else dataset_class
     dataset_kwargs = {
         "basedir": data_dir,
         "camera_mode": camera_mode,
@@ -1202,7 +1202,7 @@ def train_scene_llff(
     if USE_WANDB:
         wandb.init(
             project="mlp-splatting",
-            name=f"mip360_run_{random_tag}",
+            name=f"{dataset_name}_run_{random_tag}",
             config={
                 "num_epochs": num_epochs,
                 "batch_size": batch_size,

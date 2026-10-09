@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mip360.safe_io import require_supported_torch
+from scannet.safe_io import require_supported_torch
 
 
 def main() -> int:

@@ -16,7 +16,7 @@ def tile_ext():
     if CUDA_HOME is None:
         pytest.skip("CUDA renderer tests require an nvcc toolchain")
 
-    default_source = Path(__file__).parents[1] / "mip360" / "cuda" / "np_tile_kernels.cu"
+    default_source = Path(__file__).parents[1] / "scannet" / "cuda" / "np_tile_kernels.cu"
     source = Path(os.environ.get("MLPSP_CUDA_TEST_SOURCE", default_source))
     extension_name = os.environ.get(
         "MLPSP_CUDA_TEST_EXT_NAME", "np_tile_kernels_cuda_tests_c1536_h512"
@@ -36,7 +36,7 @@ def tile_ext():
 
 
 def test_public_scene_defaults_match_release_architecture():
-    from mip360.cumodel import NeuralPrimitiveSceneTileCUDA
+    from scannet.cumodel import NeuralPrimitiveSceneTileCUDA
 
     scene = NeuralPrimitiveSceneTileCUDA(num_primitives=2)
     assert scene.hidden_dim == 32
@@ -46,7 +46,7 @@ def test_public_scene_defaults_match_release_architecture():
 
 
 def _public_scene(device: torch.device):
-    from mip360.cumodel import NeuralPrimitiveSceneTileCUDA
+    from scannet.cumodel import NeuralPrimitiveSceneTileCUDA
 
     scene = NeuralPrimitiveSceneTileCUDA(num_primitives=1).to(device)
     scene.set_image_size(1, 1)
@@ -65,7 +65,7 @@ def _public_scene(device: torch.device):
 
 
 def _install_test_extension(monkeypatch, tile_ext):
-    import mip360.cumodel as cumodel
+    import scannet.cumodel as cumodel
 
     monkeypatch.setattr(cumodel, "_tile_ext", tile_ext)
     monkeypatch.setattr(cumodel, "_tile_ext_key", cumodel._tile_ext_build_config()[0])

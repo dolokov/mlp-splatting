@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from test_cuda_renderer import tile_ext, _base_args, _renderer_inputs
-from mip360.primitive_csr import group_records
+from scannet.primitive_csr import group_records
 
 
 CHANNELS = 512
@@ -126,7 +126,7 @@ def _assert_channelwise_vjp(actual, expected, *, mixed):
     ],
 )
 def test_512d_stream_and_feature_vjp_match_dense_oracles(tile_ext, slots, target_dtype, size):
-    from mip360.record_feature_loss import streaming_feature_l1, feature_weight_gradients
+    from scannet.record_feature_loss import streaming_feature_l1, feature_weight_gradients
 
     torch.backends.cuda.matmul.allow_tf32 = False
     width, height, target_width, target_height = size
@@ -199,7 +199,7 @@ def test_512d_stream_and_feature_vjp_match_dense_oracles(tile_ext, slots, target
 @pytest.mark.parametrize("slots", [4, 5])
 @pytest.mark.parametrize("precision", ["float32", "float16"])
 def test_512d_scene_keeps_feature_stop_gradient_and_rgb_d4(tile_ext, monkeypatch, slots, precision):
-    from mip360 import cumodel, csr_training
+    from scannet import cumodel, csr_training
 
     monkeypatch.setattr(cumodel, "_tile_ext", tile_ext)
     monkeypatch.setattr(cumodel, "_tile_ext_key", cumodel._tile_ext_build_config(8)[0])
