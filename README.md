@@ -55,7 +55,9 @@ python -m pip install -r requirements-optional.txt
 
 See [SECURITY.md](SECURITY.md) for checkpoint loading guidance.
 
-## Replica data
+## Data
+
+### Replica
 
 Download the
 [Feature-3DGS processed Replica archive](https://drive.google.com/file/d/1sC2ZJUBRHKeWXXVUj7rIBEM-xaibvGw7/view?usp=sharing).
@@ -79,6 +81,51 @@ evaluation uses the complete test split.
 
 Retain the terms and citation of the
 [Replica dataset](https://github.com/facebookresearch/Replica-Dataset).
+
+### ScanNet
+
+Prepare each ScanNet scene in the processed COLMAP layout below. Raw `.sens`,
+depth, and pose files are not read directly by the loader.
+
+```text
+sceneXXXX_XX/
+├── images/                     # RGB images, e.g. 000000.jpg
+├── sparse/0/
+│   ├── cameras.bin             # camera calibration
+│   ├── images.bin              # registered image names and poses
+│   └── points3D.bin            # non-empty point cloud for initialization
+└── rgb_feature_langseg/        # optional for RGB-only training
+    └── 000000.pt               # 512D LSeg features for 000000.jpg
+```
+
+RGB filenames must match the names in `images.bin`. For LSeg supervision,
+provide one feature file per RGB image with the same filename stem. Supported
+formats are `.pt`, `.npy`, and `.npz`, containing a tensor/array of shape
+`512 × H × W` or `H × W × 512`. Dictionary/archive payloads should use the key
+`feat`. If both layouts are possible, name the file with an explicit layout
+suffix, such as `000000_feature_chw.pt` or `000000_feature_hwc.pt`.
+
+ScanNet uses the COLMAP loader (`--dataset mip360`). Supply these data options
+to both `train.py` and `evaluate.py`:
+
+```text
+--dataset mip360 --data /path/to/ScanNet/sceneXXXX_XX --factor 1
+--split-mode scannet_feature3dgs --llffhold 8 --split-test-offset 2
+```
+
+Views are sorted by numeric filename suffix; zero-based indices 2, 10, 18,
+and so on form the test split, with the remaining views used for training.
+Use `--feature-type lseg` for feature-supervised training, or
+`--feature-type none` for RGB-only training. `--feature-dir` can override the
+default feature folder. With `--factor 2`, `4`, or `8`, provide the corresponding
+pre-resized `images_2/`, `images_4/`, or `images_8/` directory with unchanged
+filenames; the loader does not resize RGB images automatically.
+
+All views must share one calibration. The default camera mode requires
+undistorted `SIMPLE_PINHOLE` or `PINHOLE` cameras with centered principal points
+and approximately square pixels. For non-centered intrinsics, unequal focal
+lengths, or an `OPENCV` camera model, select `--camera-mode colmap-native` when
+training. RGB evaluation restores the camera mode from the checkpoint.
 
 ## Training
 
