@@ -57,75 +57,44 @@ See [SECURITY.md](SECURITY.md) for checkpoint loading guidance.
 
 ## Data
 
-### Replica
-
-Download the
-[Feature-3DGS processed Replica archive](https://drive.google.com/file/d/1sC2ZJUBRHKeWXXVUj7rIBEM-xaibvGw7/view?usp=sharing).
-Each scene should contain:
+Replica and processed ScanNet scenes use the same COLMAP layout:
 
 ```text
-room0/
+scene/
 ├── images/
 ├── sparse/0/
 │   ├── cameras.bin
 │   ├── images.bin
 │   └── points3D.bin
-└── rgb_feature_langseg/         # 512D LSeg features
+└── rgb_feature_langseg/         # optional 512D LSeg features
 ```
 
-The configurations use the Feature-3DGS split with `llffhold=8` and offset 2.
-Training exclusions are applied after splitting: room1 excludes
-`rgb_009.png`; office4 excludes `rgb_102.png` and `rgb_108.png`.
-Room0 and office3 use all training views. Source images remain on disk, and
-evaluation uses the complete test split.
+RGB filenames must match `images.bin`; feature files must share the RGB stem.
+LSeg features support `.pt`, `.npy`, or `.npz` with shape `512 × H × W` or
+`H × W × 512` (dictionary/archive key: `feat`). Use `--feature-type lseg`
+for feature supervision. With `--factor N` greater than 1, provide pre-resized
+images in `images_N/` with unchanged filenames.
 
-Retain the terms and citation of the
-[Replica dataset](https://github.com/facebookresearch/Replica-Dataset).
+### Replica
+
+Download the [Feature-3DGS processed archive](https://drive.google.com/file/d/1sC2ZJUBRHKeWXXVUj7rIBEM-xaibvGw7/view?usp=sharing)
+and retain the [Replica dataset](https://github.com/facebookresearch/Replica-Dataset)
+terms and citation. The supplied configurations use `llffhold=8`, offset 2,
+and exclude `rgb_009.png` in room1 and `rgb_102.png`/`rgb_108.png` in office4
+from training only. Original files and the complete test split are retained.
 
 ### ScanNet
 
-Prepare each ScanNet scene in the processed COLMAP layout below. Raw `.sens`,
-depth, and pose files are not read directly by the loader.
-
-```text
-sceneXXXX_XX/
-├── images/                     # RGB images, e.g. 000000.jpg
-├── sparse/0/
-│   ├── cameras.bin             # camera calibration
-│   ├── images.bin              # registered image names and poses
-│   └── points3D.bin            # non-empty point cloud for initialization
-└── rgb_feature_langseg/        # optional for RGB-only training
-    └── 000000.pt               # 512D LSeg features for 000000.jpg
-```
-
-RGB filenames must match the names in `images.bin`. For LSeg supervision,
-provide one feature file per RGB image with the same filename stem. Supported
-formats are `.pt`, `.npy`, and `.npz`, containing a tensor/array of shape
-`512 × H × W` or `H × W × 512`. Dictionary/archive payloads should use the key
-`feat`. If both layouts are possible, name the file with an explicit layout
-suffix, such as `000000_feature_chw.pt` or `000000_feature_hwc.pt`.
-
-ScanNet uses the COLMAP loader (`--dataset mip360`). Supply these data options
-to both `train.py` and `evaluate.py`:
+Use processed scenes such as `sceneXXXX_XX/`, not raw `.sens` files. Pass these
+data options to both training and RGB evaluation:
 
 ```text
 --dataset mip360 --data /path/to/ScanNet/sceneXXXX_XX --factor 1
 --split-mode scannet_feature3dgs --llffhold 8 --split-test-offset 2
 ```
 
-Views are sorted by numeric filename suffix; zero-based indices 2, 10, 18,
-and so on form the test split, with the remaining views used for training.
-Use `--feature-type lseg` for feature-supervised training, or
-`--feature-type none` for RGB-only training. `--feature-dir` can override the
-default feature folder. With `--factor 2`, `4`, or `8`, provide the corresponding
-pre-resized `images_2/`, `images_4/`, or `images_8/` directory with unchanged
-filenames; the loader does not resize RGB images automatically.
-
-All views must share one calibration. The default camera mode requires
-undistorted `SIMPLE_PINHOLE` or `PINHOLE` cameras with centered principal points
-and approximately square pixels. For non-centered intrinsics, unequal focal
-lengths, or an `OPENCV` camera model, select `--camera-mode colmap-native` when
-training. RGB evaluation restores the camera mode from the checkpoint.
+All views must share one calibration. For off-center intrinsics, unequal focal
+lengths, or `OPENCV` cameras, train with `--camera-mode colmap-native`.
 
 ## Training
 
