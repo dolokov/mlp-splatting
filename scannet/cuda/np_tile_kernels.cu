@@ -4508,17 +4508,15 @@ __global__ void validate_tile_candidate_capacity_kernel(
       atomicMax(status + 1, count);
     }
   }
-  // Opt-in ID validation shares the same status readback. No render kernel
+  // ID validation shares the same status readback. No render kernel
   // starts before this check, including when offsets themselves are invalid.
-  if (num_primitives >= 0) {
-    bool invalid = false;
-    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-         i < num_candidates; i += (int64_t)blockDim.x * gridDim.x) {
-      const int p = candidates[i];
-      invalid |= p < 0 || p >= num_primitives;
-    }
-    if (invalid) atomicOr(status, 4);
+  bool invalid = false;
+  for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+       i < num_candidates; i += (int64_t)blockDim.x * gridDim.x) {
+    const int p = candidates[i];
+    invalid |= p < 0 || p >= num_primitives;
   }
+  if (invalid) atomicOr(status, 4);
 }
 
 static inline void validate_tile_candidate_capacity(
@@ -4530,7 +4528,7 @@ static inline void validate_tile_candidate_capacity(
     const int64_t TH,
     const int capacity,
     const char* path_name,
-    const int64_t num_primitives = -1)
+    const int64_t num_primitives)
 {
   TORCH_CHECK(Wimg > 0 && Himg > 0 && TW > 0 && TH > 0,
               path_name, ": image and tile dimensions must be positive");
@@ -4556,15 +4554,14 @@ static inline void validate_tile_candidate_capacity(
               ", expected ", num_tiles64 + 1, ")");
   TORCH_CHECK(culled_prim_indices.numel() <= 2147483647LL,
               path_name, ": candidate list is too large for int32 offsets");
-  TORCH_CHECK(num_primitives >= -1 && num_primitives <= 2147483647LL,
+  TORCH_CHECK(num_primitives >= 0 && num_primitives <= 2147483647LL,
               path_name, ": primitive count is outside the supported int32 range");
 
   const int num_tiles = (int)num_tiles64;
   const int num_candidates = (int)culled_prim_indices.numel();
   auto status = torch::zeros({2}, tile_offsets.options());
   const int threads = 256;
-  const int64_t work_items = num_primitives >= 0
-      ? std::max<int64_t>(num_tiles, num_candidates) : num_tiles;
+  const int64_t work_items = std::max<int64_t>(num_tiles, num_candidates);
   const int needed_blocks = (int)((work_items + threads - 1) / threads);
   const int blocks = needed_blocks < 4096 ? needed_blocks : 4096;
   validate_tile_candidate_capacity_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
@@ -4693,7 +4690,7 @@ public:
         TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
         validate_tile_candidate_capacity(
             culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-            "render_tiles_autograd");
+            "render_tiles_autograd", positions.size(0));
 
         const int64_t N = positions.size(0);
         const int64_t Hh = W2.size(1);
@@ -4805,7 +4802,7 @@ public:
         TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
         validate_tile_candidate_capacity(
             culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-            "render_tiles_autograd_tilecenter");
+            "render_tiles_autograd_tilecenter", positions.size(0));
 
         const int64_t N = positions.size(0);
         const int64_t Hh = W2.size(1);
@@ -4911,6 +4908,9 @@ public:
 
         const int64_t B = rays_o.size(0);
         TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
+        validate_tile_candidate_capacity(
+            culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
+            "render_tiles_autograd_tilecenter_presorted", positions.size(0));
 
         const int64_t N = positions.size(0);
         const int64_t Hh = W2.size(1);
@@ -5089,7 +5089,7 @@ std::tuple<torch::Tensor, torch::Tensor> render_tiles_forward_wrapper(
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-        "render_tiles_forward");
+        "render_tiles_forward", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -5164,7 +5164,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> render_tiles_forward_per
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-        "render_tiles_forward_per_pixel_with_feat");
+        "render_tiles_forward_per_pixel_with_feat", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -5264,7 +5264,7 @@ std::tuple<torch::Tensor, torch::Tensor> render_tiles_forward_tilecenter_wrapper
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_forward_tilecenter");
+        "render_tiles_forward_tilecenter", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -5391,7 +5391,7 @@ std::tuple<torch::Tensor, torch::Tensor> render_tiles_forward_tilecenter_stats_w
 
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_forward_tilecenter_stats");
+        "render_tiles_forward_tilecenter_stats", positions.size(0));
 
     auto out_rgb = torch::empty({Himg * Wimg, 3}, torch::TensorOptions().device(rays_o.device()).dtype(torch::kFloat));
     auto out_alpha = torch::empty({Himg * Wimg, 1}, torch::TensorOptions().device(rays_o.device()).dtype(torch::kFloat));
@@ -5746,7 +5746,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> render_tiles_forward_til
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_forward_tilecenter_with_t");
+        "render_tiles_forward_tilecenter_with_t", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6146,7 +6146,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> render_tiles_forward_til
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_forward_tilecenter_with_feat");
+        "render_tiles_forward_tilecenter_with_feat", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6233,7 +6233,7 @@ torch::Tensor render_tiles_backward_count_per_pixel_wrapper(
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-        "render_tiles_backward_count_per_pixel");
+        "render_tiles_backward_count_per_pixel", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6304,7 +6304,7 @@ torch::Tensor render_tiles_backward_count_tilecenter_wrapper(
     // full tilecenter backward, so its conservative candidate cap is 256.
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 256,
-        "render_tiles_backward_count_tilecenter");
+        "render_tiles_backward_count_tilecenter", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6379,7 +6379,7 @@ render_tiles_backward_emit_per_pixel_wrapper(
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-        "render_tiles_backward_emit_per_pixel");
+        "render_tiles_backward_emit_per_pixel", positions.size(0));
     TORCH_CHECK(grad_T_end.numel() == B, "grad_T_end must have size B");
     TORCH_CHECK(counts.numel() == B, "counts must have size B");
     TORCH_CHECK(offsets.numel() == B, "offsets must have size B");
@@ -6479,7 +6479,7 @@ render_tiles_backward_emit_tilecenter_wrapper(
     TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_backward_emit_tilecenter");
+        "render_tiles_backward_emit_tilecenter", positions.size(0));
     TORCH_CHECK(grad_T_end.numel() == B, "grad_T_end must have size B");
     TORCH_CHECK(counts.numel() == B, "counts must have size B");
     TORCH_CHECK(offsets.numel() == B, "offsets must have size B");
@@ -6571,7 +6571,7 @@ torch::Tensor render_tiles_backward_featattr_tilecenter_wrapper(
     TORCH_CHECK(grad_out_feat.size(0) == B, "grad_out_feat must have shape (B, Cfeat)");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_backward_featattr_tilecenter");
+        "render_tiles_backward_featattr_tilecenter", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6662,7 +6662,7 @@ torch::Tensor render_tiles_backward_featattr_per_pixel_wrapper(
     TORCH_CHECK(grad_out_feat.size(0) == B, "grad_out_feat must have shape (B, Cfeat)");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
-        "render_tiles_backward_featattr_per_pixel");
+        "render_tiles_backward_featattr_per_pixel", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6770,7 +6770,7 @@ render_tiles_backward_tilecenter_full_wrapper(
     TORCH_CHECK(grad_T_end.numel() == B, "grad_T_end must have size B");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_backward_tilecenter_full");
+        "render_tiles_backward_tilecenter_full", positions.size(0));
 
     const int64_t N = positions.size(0);
     const int64_t Hh = W2.size(1);
@@ -6924,7 +6924,7 @@ std::vector<torch::Tensor> render_tiles_mlp_records_common(
     TORCH_CHECK(x[14].dim() == 2 && x[14].size(0) == n && x[14].size(1) == 4);
     TORCH_CHECK(x[15].sizes() == x[0].sizes() && x[16].dim() == 1 && x[16].numel() == pixels);
     validate_tile_candidate_capacity(x[5], x[6], width, height, tile, tile,
-                                    MLPSP_MAX_TILE_PRIMS, "render_tiles_mlp_records");
+                                    MLPSP_MAX_TILE_PRIMS, "render_tiles_mlp_records", n);
 
     auto counts = torch::zeros({pixels}, x[5].options());
     auto overflow = torch::zeros({1}, x[5].options());
@@ -7065,7 +7065,7 @@ render_tiles_backward_tilecenter_full_with_feat_wrapper(
                 "grad_out_feat feature dimension must match feat_attr and be in [1,512]");
     validate_tile_candidate_capacity(
         culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-        "render_tiles_backward_tilecenter_full_with_feat");
+        "render_tiles_backward_tilecenter_full_with_feat", positions.size(0));
 
     auto opts_f = rays_o.options().dtype(at::kFloat);
     auto grad_W1 = torch::zeros(W1.sizes(), opts_f);
@@ -7127,7 +7127,7 @@ render_tiles_backward_tilecenter_traversal_wrapper(
 {
   validate_tile_candidate_capacity(
       culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-      "render_tiles_backward_tilecenter_traversal");
+      "render_tiles_backward_tilecenter_traversal", pos.size(0));
   const auto opts_i = torch::TensorOptions().dtype(torch::kInt32).device(rays_o.device());
   const auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(rays_o.device());
   auto out_used = torch::zeros({Himg * Wimg}, opts_i);
@@ -7180,7 +7180,7 @@ render_tiles_backward_tilecenter_backprop_noatomic_wrapper(
 {
   validate_tile_candidate_capacity(
       culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
-      "render_tiles_backward_tilecenter_backprop_noatomic");
+      "render_tiles_backward_tilecenter_backprop_noatomic", pos.size(0));
   auto opts_f = rays_o.options().dtype(at::kFloat);
   auto out_sink = torch::zeros({Himg * Wimg}, opts_f);
 

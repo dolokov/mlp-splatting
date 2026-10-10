@@ -23,6 +23,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scannet import eval_rgb_psnr as evaluation  # noqa: E402
+from scannet.camera import checkpoint_camera_mode, validate_checkpoint_calibration  # noqa: E402
+from scannet.safe_io import load_checkpoint  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -201,8 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     torch.backends.cudnn.benchmark = True
     os.environ["MLPSP_TILE_ORDER"] = args.tile_order
 
+    camera_checkpoint = load_checkpoint(args.checkpoint)
+    camera_mode = checkpoint_camera_mode(camera_checkpoint)
+    if camera_mode == "colmap-native" and args.dataset_loader != "scannet":
+        raise ValueError("Native camera checkpoint requires the scannet COLMAP loader")
     dataset_args = argparse.Namespace(
         data_dir=args.data_dir,
+        camera_mode=camera_mode,
         factor=args.factor,
         llffhold=args.llffhold,
         split=args.split,
@@ -213,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     dataset_cls = evaluation._load_dataset_class(args.dataset_loader)
     dataset = evaluation._build_dataset(dataset_cls, dataset_args)
+    validate_checkpoint_calibration(camera_checkpoint, dataset)
+    del camera_checkpoint
     if not len(dataset):
         raise RuntimeError("the selected split is empty")
     if args.expected_views and len(dataset) != args.expected_views:
@@ -327,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             "timed_cycles": args.timed_cycles,
             "views": len(frames),
             "dataset_loader": args.dataset_loader,
+            "camera_mode": camera_mode,
             "split": args.split,
             "split_mode": args.split_mode,
             "split_test_offset": args.split_test_offset,
