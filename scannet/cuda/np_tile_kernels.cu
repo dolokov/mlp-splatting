@@ -4908,8 +4908,10 @@ public:
 
         const int64_t B = rays_o.size(0);
         TORCH_CHECK(B == (Wimg * Himg), "B must equal W*H for tile renderer");
+        // This kernel streams entries beyond the shared-list capacity from
+        // global memory. Validate offsets and IDs without imposing a new cap.
         validate_tile_candidate_capacity(
-            culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, MLPSP_MAX_TILE_PRIMS,
+            culled_prim_indices, tile_offsets, Wimg, Himg, TW, TH, 0,
             "render_tiles_autograd_tilecenter_presorted", positions.size(0));
 
         const int64_t N = positions.size(0);

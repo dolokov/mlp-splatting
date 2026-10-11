@@ -256,10 +256,10 @@ def test_warp_aggregated_atomic_handles_sparse_peer_masks(tile_ext):
         ("render_tiles_backward_count_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
         ("render_tiles_backward_emit_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
         ("render_tiles_backward_featattr_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
-        ("render_tiles_forward_tilecenter", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_forward_tilecenter_with_feat", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_backward_tilecenter_full", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_backward_featattr_tilecenter", 768, "tile candidate capacity 768 exceeded"),
+        ("render_tiles_forward_tilecenter", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_forward_tilecenter_with_feat", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_backward_tilecenter_full", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_backward_featattr_tilecenter", 1536, "tile candidate capacity 1536 exceeded"),
     ],
 )
 def test_rgb_and_feature_entry_points_fail_explicitly_on_capacity_overflow(
@@ -369,3 +369,20 @@ def test_scalar_entry_points_reject_invalid_primitive_ids_before_rendering(
 def test_primitive_id_boundaries_and_empty_scene_are_accepted(tile_ext, name: str, n: int):
     outputs = _invoke(tile_ext, name, _renderer_inputs(n))
     assert all(torch.isfinite(output).all() for output in outputs)
+
+
+def test_presorted_streams_and_validates_candidates_beyond_shared_capacity(tile_ext):
+    data = _renderer_inputs(1537)
+    # The only hit is in the global-memory tail, beyond the shared-list buffer.
+    data["positions"][:-1, 0] = 100.0
+    name = "render_tiles_autograd_tilecenter_presorted"
+    expected = _invoke(tile_ext, name, _renderer_inputs(1))
+    actual = _invoke(tile_ext, name, data)
+    assert expected[1].item() > 0
+    for value, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(value, reference, rtol=0, atol=0)
+    for invalid_id in (-1, 1537):
+        data["candidates"][-1] = invalid_id
+        with pytest.raises(RuntimeError, match="candidate primitive IDs must be in"):
+            _invoke(tile_ext, name, data)
+        torch.cuda.synchronize()
