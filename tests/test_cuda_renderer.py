@@ -164,24 +164,26 @@ def _base_args(data):
 def _invoke(tile_ext, name: str, data):
     base = _base_args(data)
     dims = (1, 1, 1, 1, 1.0e-3)
-    if name == "render_tiles_forward":
-        return tile_ext.render_tiles_forward(*base, *dims)
-    if name == "render_tiles_autograd":
-        return tile_ext.render_tiles_autograd(*base, *dims)
+    if name in {
+        "render_tiles_forward", "render_tiles_autograd",
+        "render_tiles_autograd_tilecenter", "render_tiles_autograd_tilecenter_presorted",
+        "render_tiles_forward_tilecenter", "render_tiles_forward_tilecenter_with_t",
+        "render_tiles_backward_count_per_pixel", "render_tiles_backward_count_tilecenter",
+        "render_tiles_backward_tilecenter_traversal",
+    }:
+        return getattr(tile_ext, name)(*base, *dims)
     if name == "render_tiles_forward_per_pixel_with_feat":
         return tile_ext.render_tiles_forward_per_pixel_with_feat(
             *base, data["feat_attr"], 1.0, 1.0, *dims
         )
-    if name == "render_tiles_backward_count_per_pixel":
-        return tile_ext.render_tiles_backward_count_per_pixel(*base, *dims)
     if name == "render_tiles_backward_featattr_per_pixel":
         return tile_ext.render_tiles_backward_featattr_per_pixel(
             *base, data["feat_attr"], data["grad_feat"], 1.0, 1.0, *dims
         )
-    if name == "render_tiles_backward_emit_per_pixel":
+    if name in {"render_tiles_backward_emit_per_pixel", "render_tiles_backward_emit_tilecenter"}:
         counts = torch.full((1,), data["positions"].shape[0], device="cuda", dtype=torch.int32)
         record_offsets = torch.zeros(1, device="cuda", dtype=torch.int32)
-        return tile_ext.render_tiles_backward_emit_per_pixel(
+        return getattr(tile_ext, name)(
             *base,
             data["grad_rgb"],
             data["grad_t"],
@@ -190,8 +192,6 @@ def _invoke(tile_ext, name: str, data):
             int(counts[0]),
             *dims,
         )
-    if name == "render_tiles_forward_tilecenter":
-        return tile_ext.render_tiles_forward_tilecenter(*base, *dims)
     if name == "render_tiles_forward_tilecenter_with_feat":
         return tile_ext.render_tiles_forward_tilecenter_with_feat(
             *base, data["feat_attr"], 1.0, 1.0, *dims
@@ -200,6 +200,30 @@ def _invoke(tile_ext, name: str, data):
         return tile_ext.render_tiles_backward_tilecenter_full(
             *base, data["grad_rgb"], data["grad_t"], *dims
         )
+    if name == "render_tiles_backward_tilecenter_backprop_noatomic":
+        return tile_ext.render_tiles_backward_tilecenter_backprop_noatomic(
+            *base, data["grad_rgb"], data["grad_t"], *dims
+        )
+    if name == "render_tiles_backward_tilecenter_full_with_feat":
+        return tile_ext.render_tiles_backward_tilecenter_full_with_feat(
+            *base, data["feat_attr"], data["grad_rgb"], data["grad_t"],
+            data["grad_feat"], 1.0, 1.0, *dims
+        )
+    if name == "render_tiles_forward_tilecenter_stats":
+        n = data["positions"].shape[0]
+        stats = [torch.zeros(n, device="cuda", dtype=dtype)
+                 for dtype in (torch.float32, torch.float32, torch.int32,
+                               torch.float32, torch.int32)]
+        return tile_ext.render_tiles_forward_tilecenter_stats(
+            *base[:9], data["freq"].numel(), *base[9:],
+            n, data["W2"].shape[1], data["W1"].shape[2],
+            *dims, data["grad_rgb"], *stats
+        )
+    if name in {"render_tiles_mlp_records", "render_tiles_training_records"}:
+        inputs = [*base, data["grad_rgb"], data["grad_t"]]
+        if name == "render_tiles_mlp_records":
+            return tile_ext.render_tiles_mlp_records(inputs, 1, 1, 8, 1.0e-3)
+        return tile_ext.render_tiles_training_records(inputs, 1, 1, 8, 1.0e-3, 1.0, 1.0)
     if name == "render_tiles_backward_featattr_tilecenter":
         return tile_ext.render_tiles_backward_featattr_tilecenter(
             *base, data["feat_attr"], data["grad_feat"], 1.0, 1.0, *dims
@@ -232,10 +256,10 @@ def test_warp_aggregated_atomic_handles_sparse_peer_masks(tile_ext):
         ("render_tiles_backward_count_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
         ("render_tiles_backward_emit_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
         ("render_tiles_backward_featattr_per_pixel", 256, "per-pixel intersection capacity 256 exceeded"),
-        ("render_tiles_forward_tilecenter", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_forward_tilecenter_with_feat", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_backward_tilecenter_full", 768, "tile candidate capacity 768 exceeded"),
-        ("render_tiles_backward_featattr_tilecenter", 768, "tile candidate capacity 768 exceeded"),
+        ("render_tiles_forward_tilecenter", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_forward_tilecenter_with_feat", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_backward_tilecenter_full", 1536, "tile candidate capacity 1536 exceeded"),
+        ("render_tiles_backward_featattr_tilecenter", 1536, "tile candidate capacity 1536 exceeded"),
     ],
 )
 def test_rgb_and_feature_entry_points_fail_explicitly_on_capacity_overflow(
@@ -302,3 +326,63 @@ def test_tile_offsets_must_cover_the_candidate_list(tile_ext):
     data["offsets"] = torch.tensor([1, 2], device="cuda", dtype=torch.int32)
     with pytest.raises(RuntimeError, match="tile_offsets must start at zero"):
         _invoke(tile_ext, "render_tiles_forward", data)
+
+
+@pytest.mark.parametrize("name", [
+    "render_tiles_autograd",
+    "render_tiles_autograd_tilecenter",
+    "render_tiles_autograd_tilecenter_presorted",
+    "render_tiles_forward",
+    "render_tiles_forward_per_pixel_with_feat",
+    "render_tiles_forward_tilecenter",
+    "render_tiles_forward_tilecenter_stats",
+    "render_tiles_forward_tilecenter_with_t",
+    "render_tiles_forward_tilecenter_with_feat",
+    "render_tiles_backward_count_per_pixel",
+    "render_tiles_backward_count_tilecenter",
+    "render_tiles_backward_emit_per_pixel",
+    "render_tiles_backward_emit_tilecenter",
+    "render_tiles_backward_featattr_per_pixel",
+    "render_tiles_backward_featattr_tilecenter",
+    "render_tiles_backward_tilecenter_full",
+    "render_tiles_backward_tilecenter_full_with_feat",
+    "render_tiles_mlp_records",
+    "render_tiles_training_records",
+    "render_tiles_backward_tilecenter_traversal",
+    "render_tiles_backward_tilecenter_backprop_noatomic",
+])
+@pytest.mark.parametrize("invalid_id", [-1, 2])
+def test_scalar_entry_points_reject_invalid_primitive_ids_before_rendering(
+    tile_ext, name: str, invalid_id: int
+):
+    data = _renderer_inputs(2)
+    data["candidates"][0] = invalid_id
+    with pytest.raises(RuntimeError, match="candidate primitive IDs must be in"):
+        _invoke(tile_ext, name, data)
+    # Rejection must leave the context usable; a device-side assertion or an
+    # illegal memory access would also make this synchronization fail.
+    torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("name", ["render_tiles_forward", "render_tiles_forward_tilecenter"])
+@pytest.mark.parametrize("n", [0, 2])
+def test_primitive_id_boundaries_and_empty_scene_are_accepted(tile_ext, name: str, n: int):
+    outputs = _invoke(tile_ext, name, _renderer_inputs(n))
+    assert all(torch.isfinite(output).all() for output in outputs)
+
+
+def test_presorted_streams_and_validates_candidates_beyond_shared_capacity(tile_ext):
+    data = _renderer_inputs(1537)
+    # The only hit is in the global-memory tail, beyond the shared-list buffer.
+    data["positions"][:-1, 0] = 100.0
+    name = "render_tiles_autograd_tilecenter_presorted"
+    expected = _invoke(tile_ext, name, _renderer_inputs(1))
+    actual = _invoke(tile_ext, name, data)
+    assert expected[1].item() > 0
+    for value, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(value, reference, rtol=0, atol=0)
+    for invalid_id in (-1, 1537):
+        data["candidates"][-1] = invalid_id
+        with pytest.raises(RuntimeError, match="candidate primitive IDs must be in"):
+            _invoke(tile_ext, name, data)
+        torch.cuda.synchronize()
