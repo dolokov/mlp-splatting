@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scannet.checkpoints import convert_checkpoint  # noqa: E402
+from scannet.checkpoints import convert_checkpoint, make_inference_checkpoint  # noqa: E402
 from scannet.safe_io import load_checkpoint  # noqa: E402
 
 
@@ -31,12 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Canonicalize module/_orig_mod prefixes and legacy mlps.lin* keys, "
-            "then losslessly convert directional feature slots."
+            "convert directional feature slots and export an inference model."
         )
     )
     parser.add_argument("checkpoint", type=Path, nargs="?", help="trusted input .pt checkpoint")
     parser.add_argument("--input", dest="input_checkpoint", type=Path, help="named form of the input path")
     parser.add_argument("-o", "--output", type=Path, help="new output path")
+    parser.add_argument(
+        "--storage-precision", choices=("mixed", "fp32"), default="mixed",
+        help="mixed stores MLP weights/features in FP16 and geometry in FP32 (default); fp32 only converts slots",
+    )
     parser.add_argument(
         "--target-feature-slots",
         type=int,
@@ -66,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     converted, before, after = convert_checkpoint(
         raw, target_feature_slots=args.target_feature_slots
     )
+    if args.storage_precision == "mixed":
+        converted = make_inference_checkpoint(converted, target_feature_slots=args.target_feature_slots)
 
     try:
         with output.open("xb") as handle:
@@ -84,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         f"{after.feature_slots}x{after.feature_dim}"
     )
     if isinstance(raw, dict) and "optimizer_state_dict" in raw and "optimizer_state_dict" not in converted:
-        print("  optimizer: removed (slot-shaped moments are incompatible; resume with a fresh optimizer)")
+        print("  optimizer: removed; use a full training snapshot for resuming")
+    if args.storage_precision == "mixed":
+        print("  storage: FP16 MLP/features, FP32 geometry; inference only, resume from a full training snapshot")
     return 0
 
 

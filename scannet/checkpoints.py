@@ -26,6 +26,7 @@ _LEGACY_MLP_KEYS = {
     "mlps.lin3.bias": "b3",
 }
 _REQUIRED_MLP_KEYS = ("W1", "b1", "W2", "b2", "W3", "b3")
+_FP16_STORAGE_KEYS = frozenset((*_REQUIRED_MLP_KEYS, "feat_attr"))
 
 
 @dataclass(frozen=True)
@@ -293,3 +294,89 @@ def convert_checkpoint(
             # the original optimizer/parameter-group objects.
             output.pop("optimizer_state_dict", None)
     return output, before, after
+
+
+def restore_scene_state_dict(state_dict: Mapping[str, Any]) -> dict[str, Any]:
+    """Restore storage-only FP16 tensors to FP32 before rendering.
+
+    Geometry and other floating state must not be half precision. Legacy
+    full-precision checkpoints remain accepted; no input tensors are mutated.
+    """
+    state = normalize_scene_state_dict(state_dict)
+    for name, value in state.items():
+        if not torch.is_tensor(value) or not value.is_floating_point():
+            continue
+        if value.dtype == torch.float16 and name not in _FP16_STORAGE_KEYS:
+            raise TypeError(f"{name}: FP16 storage is only supported for MLP weights and features")
+        if value.dtype not in (torch.float16, torch.float32, torch.float64):
+            raise TypeError(f"{name}: unsupported scene storage dtype {value.dtype}")
+        state[name] = value.float()
+    return state
+
+
+def make_inference_checkpoint(
+    checkpoint: Mapping[str, Any], *, storage_precision: Literal["mixed", "fp32"] = "mixed",
+    target_feature_slots: Literal[4, 5] = 4,
+) -> dict[str, Any]:
+    """Create an independent inference export, never a training/resume state.
+
+    Fold legacy directional features in FP32, then store only MLP weights,
+    biases and semantic features in FP16. Geometry, auxiliary buffers and any
+    feature decoder retain FP32. This quantization is not lossless. Training
+    snapshots, parameters and optimizer moments are left untouched.
+    """
+    if storage_precision not in ("mixed", "fp32"):
+        raise ValueError("storage_precision must be mixed or fp32")
+    if target_feature_slots not in (4, 5):
+        raise ValueError("target_feature_slots must be 4 or 5")
+    view = split_checkpoint(checkpoint)
+    normalized = normalize_scene_state_dict(view.scene_state_dict)
+    for name, value in normalized.items():
+        if torch.is_tensor(value) and value.is_floating_point():
+            allowed = (torch.float16, torch.float32) if name in _FP16_STORAGE_KEYS else (torch.float32,)
+            if value.dtype not in allowed:
+                raise TypeError(f"{name}: inference export requires FP32 geometry and auxiliary state")
+    # Move detached copies to CPU before folding/casting: saving a large scene
+    # must not allocate an additional feature tensor on the training GPU.
+    state = restore_scene_state_dict({
+        name: value.detach().cpu().contiguous().clone() if torch.is_tensor(value) else value
+        for name, value in normalized.items()
+    })
+    spec = infer_scene_spec(state)
+    if spec.feature_slots not in (0, 4, 5):
+        raise ValueError("inference export requires directional features with 4 or 5 slots, or RGB-only state")
+    if spec.feature_slots in (4, 5):
+        state["feat_attr"] = convert_feature_slots(state["feat_attr"], target_feature_slots)
+    exported = {}
+    for name, value in state.items():
+        if not torch.is_tensor(value):
+            raise TypeError(f"{name}: scene state entries must be tensors")
+        value = value.detach().contiguous()
+        if value.is_floating_point():
+            if not bool(torch.isfinite(value).all()):
+                raise ValueError(f"{name}: cannot export non-finite values")
+            if storage_precision == "mixed" and name in _FP16_STORAGE_KEYS:
+                value = value.half()
+                if not bool(torch.isfinite(value).all()):
+                    raise ValueError(f"{name}: values overflow FP16 storage")
+        exported[name] = value
+    after = infer_scene_spec(exported)
+    output = dict(checkpoint) if view.wrapper_key else {}
+    output[view.wrapper_key or "scene_state_dict"] = exported
+    output.pop("optimizer_state_dict", None)
+    metadata = dict(output.get("metadata", {}))
+    metadata.update(
+        inference_only=True,
+        storage_precision="float16_mlp_and_features_float32_geometry" if storage_precision == "mixed" else "float32",
+        feature_slots=after.feature_slots,
+        feature_dim=after.feature_dim,
+    )
+    if after.feature_slots in (4, 5):
+        metadata["feature_slot_layout"] = "direct_tetrahedral" if after.feature_slots == 4 else "legacy_base_plus_four_deltas"
+    if "feature_dim_low" in metadata:
+        metadata["feature_dim_low"] = after.feature_dim
+    output["metadata"] = metadata
+    for name, value in (("feature_slots", after.feature_slots), ("feature_dim_low", after.feature_dim)):
+        if name in output:
+            output[name] = value
+    return output

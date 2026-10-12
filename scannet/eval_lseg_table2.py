@@ -49,11 +49,11 @@ from PIL import Image, ImageDraw
 try:
     from .safe_io import load_checkpoint
     from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
-    from .checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
+    from .checkpoints import infer_scene_spec, normalize_scene_state_dict, restore_scene_state_dict, split_checkpoint
 except ImportError:  # Support direct script execution.
     from safe_io import load_checkpoint
     from camera import checkpoint_camera_mode, validate_checkpoint_calibration
-    from checkpoints import infer_scene_spec, normalize_scene_state_dict, split_checkpoint
+    from checkpoints import infer_scene_spec, normalize_scene_state_dict, restore_scene_state_dict, split_checkpoint
 
 FEATURE3DGS_MANUAL_RELABEL_1BASED = {
     90: 15,  # TV -> door
@@ -897,6 +897,7 @@ def _load_scene_tile_cuda(
         raise TypeError(f"Scene checkpoint does not contain a state_dict dictionary: {scene_ckpt_path}")
     scene_sd = _strip_state_dict_prefixes(scene_sd)
     scene_sd = _remap_legacy_mlp_to_tile_keys(scene_sd)
+    scene_sd = restore_scene_state_dict(scene_sd)
 
     n, hidden_dim, pe_frequencies, feature_dim_low, feature_slots = _infer_scene_dims(scene_sd)
     scene = NeuralPrimitiveSceneTileCUDA(

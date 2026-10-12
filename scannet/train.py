@@ -25,14 +25,14 @@ try:
     from .camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from .safe_io import load_checkpoint
     from .feature_decoder import FeatureUpsampleDecoder
-    from .checkpoints import normalize_scene_state_dict, split_checkpoint
+    from .checkpoints import make_inference_checkpoint, normalize_scene_state_dict, split_checkpoint
     from .utils.loss_utils import ssim
 except ImportError:  # Support `python scannet/run.py`.
     from camera import checkpoint_camera_mode, validate_checkpoint_calibration
     from safe_io import load_checkpoint
     from scannet_loader import SceneDataset
     from feature_decoder import FeatureUpsampleDecoder
-    from checkpoints import normalize_scene_state_dict, split_checkpoint
+    from checkpoints import make_inference_checkpoint, normalize_scene_state_dict, split_checkpoint
     from utils.loss_utils import ssim
 
 
@@ -308,6 +308,8 @@ def _load_resume_state(
     raw = load_checkpoint(resume_ckpt)
     if not isinstance(raw, dict):
         raise TypeError(f"Unsupported checkpoint type at {resume_ckpt}")
+    if raw.get("metadata", {}).get("inference_only", False):
+        raise ValueError("Inference exports are quantized/folded; resume from train_state_latest.pt instead")
     if checkpoint_camera_mode(raw) != getattr(scene, "camera_mode", "legacy-centered"):
         raise ValueError("Cannot resume using a different camera model; start a new training run")
     checkpoint_view = split_checkpoint(raw)
@@ -445,7 +447,7 @@ def _save_scene_with_optional_decoder(
     }
     if feature_decoder is not None:
         payload["feature_decoder_state_dict"] = feature_decoder.state_dict()
-    torch.save(payload, scene_ckpt_path)
+    torch.save(make_inference_checkpoint(payload), scene_ckpt_path)
     if feature_decoder is not None:
         # Retain the paired file for compatibility with older evaluation tools.
         torch.save(feature_decoder.state_dict(), _paired_decoder_path(scene_ckpt_path))
