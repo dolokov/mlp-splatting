@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drone-scene-pipeline"
+version = "0.1.0"
+description = "Multiple drone videos to a connected COLMAP scene, MLP splats or Gaussian splats"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<2", "Pillow>=10"]
+
+[project.scripts]
+drone-scene = "drone_scene.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["drone_scene*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

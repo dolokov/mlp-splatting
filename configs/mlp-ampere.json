@@ -1,0 +1,35 @@
+{
+  "backend": "mlp",
+  "extraction": {
+    "fps": 0.5,
+    "max_size": 1000,
+    "max_frames": 1000,
+    "min_sharpness": 8.0,
+    "dedup_mae": 0.8
+  },
+  "sfm": {
+    "camera_mode": "shared",
+    "matcher": "hybrid",
+    "temporal_window": 10,
+    "global_stride": 5,
+    "max_pairs": 250000,
+    "use_gpu": false,
+    "min_registered_fraction": 0.85,
+    "min_per_video_fraction": 0.60
+  },
+  "training": {
+    "iterations": 30000,
+    "test_every": 8,
+    "gsplat": {"cap_max": 750000, "sh_degree": 2},
+    "mlp": {"points_per_leaf": 32}
+  },
+  "render": {
+    "trajectory": "interp",
+    "clip": null,
+    "interpolation_steps": 5,
+    "max_frames": 300,
+    "fps": 30,
+    "save_frames": false,
+    "port": 8080
+  }
+}
