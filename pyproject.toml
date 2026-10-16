@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drone-scene-pipeline"
-version = "0.1.0"
+version = "0.2.0"
 description = "Multiple drone videos to a connected COLMAP scene, MLP splats or Gaussian splats"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24,<2", "Pillow>=10"]

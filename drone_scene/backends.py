@@ -21,8 +21,11 @@ def upstream(backend, *, verify=True):
         actual = checked_output(["git", "-C", str(directory), "rev-parse", "HEAD"]).strip()
         if actual != lock["commit"]:
             raise PipelineError(f"{backend} source differs from upstreams.lock.json; reinstall the backend.")
-        if checked_output(["git", "-C", str(directory), "status", "--porcelain",
-                           "--untracked-files=no"]).strip():
+        if backend == "mlp":
+            from .mlp_compat import verify as verify_mlp_patch
+            verify_mlp_patch(directory)
+        elif checked_output(["git", "-C", str(directory), "status", "--porcelain",
+                             "--untracked-files=no"]).strip():
             raise PipelineError(f"{backend} source has local edits; use a clean pinned checkout.")
         modules = checked_output(["git", "-C", str(directory), "submodule", "status", "--recursive"])
         if any(line.startswith(("-", "+", "U")) for line in modules.splitlines()):
@@ -30,7 +33,21 @@ def upstream(backend, *, verify=True):
     return directory
 
 
-def gpu_check(backend):
+def select_mlp_backend(capability, requested="auto"):
+    if requested not in {"auto", "native", "turing"}:
+        raise PipelineError("MLP kernel_backend must be auto, native, or turing")
+    if capability < (7, 5):
+        raise PipelineError("MLP CUDA requires compute capability 7.5 or newer")
+    if requested == "native" and capability < (8, 0):
+        raise PipelineError("Native WMMA requires compute capability 8.0+; select auto or turing for TITAN RTX.")
+    return "turing" if requested == "turing" or (requested == "auto" and capability < (8, 0)) else "native"
+
+
+def mlp_requested(cfg):
+    return cfg["training"]["mlp"].get("kernel_backend", "auto")
+
+
+def gpu_check(backend, *, mlp_kernel_backend="auto"):
     try:
         import torch
     except ImportError:
@@ -38,13 +55,11 @@ def gpu_check(backend):
     if not torch.cuda.is_available():
         raise PipelineError("PyTorch cannot see an NVIDIA GPU. Check the driver and active environment.")
     cc = torch.cuda.get_device_capability()
-    floor = (8, 0) if backend == "mlp" else (7, 5)
-    if cc < floor:
+    if cc < (7, 5):
         raise PipelineError(
-            f"{torch.cuda.get_device_name()} is sm_{cc[0]}{cc[1]}; this {backend} route requires "
-            f"sm_{floor[0]}{floor[1]}+. TITAN RTX users: select configs/titan.json (gsplat). "
-            "For native MLP training use an Ampere-or-newer GPU. A newer driver does not change compute capability."
+            f"{torch.cuda.get_device_name()} is sm_{cc[0]}{cc[1]}; this pipeline requires sm_75+."
         )
+    mlp_selected = select_mlp_backend(cc, mlp_kernel_backend) if backend == "mlp" else None
     required_torch = (2, 10) if backend == "mlp" else (2, 7)
     torch_version = tuple(int(n) for n in torch.__version__.split("+")[0].split(".")[:2])
     if torch_version != required_torch:
@@ -58,10 +73,16 @@ def gpu_check(backend):
     free, total = torch.cuda.mem_get_info()
     print(f"GPU: {torch.cuda.get_device_name()} | sm_{cc[0]}{cc[1]} | "
           f"{free / 2**30:.1f}/{total / 2**30:.1f} GiB free | torch {torch.__version__} | CUDA {torch.version.cuda}")
-    return {"TORCH_CUDA_ARCH_LIST": f"{cc[0]}.{cc[1]}"}
+    env = {"TORCH_CUDA_ARCH_LIST": f"{cc[0]}.{cc[1]}"}
+    if mlp_selected:
+        print(f"MLP CUDA build: {mlp_selected} "
+              + ("(FP32 scalar forward/backward; WMMA/BF16 excluded)" if mlp_selected == "turing"
+                 else "(full upstream build, including WMMA/BF16 entrypoints)"))
+        env.update({"MLPSP_CUDA_BACKEND": mlp_selected, "MLPSP_TRAINING_BACKEND": "legacy"})
+    return env
 
 
-def doctor(backend, preprocessing_only=False):
+def doctor(backend, preprocessing_only=False, *, mlp_kernel_backend="auto"):
     for command in ("ffmpeg", "ffprobe", "colmap", "git"):
         if not shutil.which(command):
             raise PipelineError(f"{command} missing. Activate the environment created from environment.yml.")
@@ -71,7 +92,7 @@ def doctor(backend, preprocessing_only=False):
     if preprocessing_only:
         print("Preprocessing tools found; training hardware check skipped.")
         return
-    gpu_check(backend)
+    gpu_check(backend, mlp_kernel_backend=mlp_kernel_backend)
     upstream(backend)
     if backend == "gsplat":
         try:
@@ -132,7 +153,7 @@ def mlp_command(cfg, work, verify=True):
 def train(runner, cfg):
     backend = cfg["backend"]
     if not runner.dry_run:
-        env = gpu_check(backend)
+        env = gpu_check(backend, mlp_kernel_backend=mlp_requested(cfg))
         images = read_images(runner.work / "scene" / "sparse" / "0" / "images.bin")
         cameras = read_cameras(runner.work / "scene" / "sparse" / "0" / "cameras.bin")
         if backend == "mlp":
@@ -157,20 +178,25 @@ def train(runner, cfg):
                      else mlp_command(cfg, runner.work, verify=not runner.dry_run))
     env.update({"MAX_JOBS": "2", "TORCH_EXTENSIONS_DIR": str(runner.work / "torch-extensions"),
                 "CUDA_VISIBLE_DEVICES": "0"})
+    if backend == "mlp" and not runner.dry_run:
+        write_json(model_dir(runner.work, backend) / "execution.json",
+                   {"cuda_arch": env["TORCH_CUDA_ARCH_LIST"], "kernel_backend": env["MLPSP_CUDA_BACKEND"],
+                    "precision": "float32", "upstream": read_json(ROOT / "upstreams.lock.json")["mlp"]})
     runner.run(command, cwd=repo, env=env)
 
 
 def render(runner, cfg, output):
+    env = {}
     if not runner.dry_run:
-        gpu_check(cfg["backend"])
+        env = gpu_check(cfg["backend"], mlp_kernel_backend=mlp_requested(cfg))
         upstream(cfg["backend"])
     config_path = output.parent / "config.json"
     if not runner.dry_run:
         write_json(config_path, cfg)
+    env.update({"MAX_JOBS": "2", "TORCH_EXTENSIONS_DIR": str(runner.work / "torch-extensions"),
+                "CUDA_VISIBLE_DEVICES": "0"})
     runner.run([sys.executable, "-m", "drone_scene.render_backend", "--config", config_path,
-                "--workspace", runner.work, "--output", output], cwd=ROOT,
-               env={"MAX_JOBS": "2", "TORCH_EXTENSIONS_DIR": str(runner.work / "torch-extensions"),
-                    "CUDA_VISIBLE_DEVICES": "0"})
+                "--workspace", runner.work, "--output", output], cwd=ROOT, env=env)
 
 
 def view(runner, cfg):

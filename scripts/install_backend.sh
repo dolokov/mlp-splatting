@@ -34,17 +34,27 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from drone_scene.mlp_compat import apply as apply_mlp_patch, verify as verify_mlp_patch
 
 backend = sys.argv[1]
 lock = json.loads(Path('upstreams.lock.json').read_text())[backend]
 destination = Path('third_party') / backend
 if not destination.exists():
     subprocess.run(['git', 'clone', lock['url'], str(destination)], check=True)
-if subprocess.check_output(['git', '-C', str(destination), 'status', '--porcelain']).strip():
-    raise SystemExit(f'{destination} contains local changes; preserve them before reinstalling.')
+dirty = subprocess.check_output(['git', '-C', str(destination), 'status', '--porcelain', '--untracked-files=no']).strip()
+if dirty:
+    if backend == 'mlp':
+        verify_mlp_patch(destination, allow_pristine=True)
+    else:
+        raise SystemExit(f'{destination} contains local changes; preserve them before reinstalling.')
+current = subprocess.check_output(['git', '-C', str(destination), 'rev-parse', 'HEAD'], text=True).strip()
+if current != lock['commit'] and dirty:
+    raise SystemExit('A modified checkout cannot be moved to another commit. Preserve it before reinstalling.')
 subprocess.run(['git', '-C', str(destination), 'fetch', 'origin', lock['commit']], check=True)
 subprocess.run(['git', '-C', str(destination), 'checkout', '--detach', lock['commit']], check=True)
 subprocess.run(['git', '-C', str(destination), 'submodule', 'update', '--init', '--recursive'], check=True)
+if backend == 'mlp':
+    print('MLP compatibility patch:', apply_mlp_patch(destination.resolve()))
 PY
 if [[ "$backend" == gsplat ]]; then
   python -m pip install -r requirements-gsplat.txt
@@ -55,6 +65,6 @@ if [[ "$backend" == gsplat ]]; then
 else
   python -m pip install -r third_party/mlp/requirements.txt
   python -m pip install -e third_party/mlp --no-deps
-  python -m drone_scene doctor --config configs/mlp-ampere.json
+  python -m drone_scene doctor --config configs/mlp-titan.json
 fi
 echo 'Backend ready. The first render/training call may compile additional CUDA kernels.'

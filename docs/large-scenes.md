@@ -12,14 +12,14 @@ If memory is tight, try these changes in a fresh config/workspace:
 2. Reduce redundant frames while preserving overlapping views and bridging flights. Do not lower FPS until adjacent cameras lose shared landmarks.
 3. Lower Gaussian `cap_max` and keep SH degree 2 or try 1. The initial SfM points still need to be below the cap. Fewer primitives trade detail for memory.
 4. Close GPU-heavy apps. Keep enough host RAM and fast SSD space for COLMAP, image caches, and outputs.
-5. For native MLP, its eager loader and full-frame renderer are independent bottlenecks. Increase `training.mlp.points_per_leaf` to reduce initial primitive count and reduce ray-cache sizes. This still needs an Ampere-or-newer GPU for this route.
+5. For MLP, its eager loader and full-frame renderer are independent bottlenecks. Increase `training.mlp.points_per_leaf` to reduce initial primitive count and reduce ray-cache sizes. TITAN RTX now uses the scalar FP32 compatibility build; SM80+ can use the full native build. The scalar route can be slow, so test a small pilot first.
 
 ## Choose the representation for the deliverable
 
 | Approach | Good reason to choose it | Tradeoffs / work remaining |
 | --- | --- | --- |
 | gsplat 3D Gaussians (included) | Useful first result on this TITAN; broad PLY viewing/editing ecosystem | A single high-detail site can still exceed memory; no built-in scene streaming |
-| Native MLP-Splatting (included) | Experiment with expressive localized neural primitives and the paper's representation | Supported GPU floor here is 8.0+; outdoor tuning needed; native runtime; eager host-image loading |
+| MLP-Splatting (included) | Experiment with expressive localized neural primitives and the paper's representation | SM75 uses scalar FP32 compatibility kernels; SM80+ retains full native build; outdoor tuning and host RAM still matter |
 | Scaffold-GS | MLP-conditioned Gaussian generation; a nearby idea if you want neural prediction with Gaussian rendering | Distinct from native MLP-Splatting; custom training/viewer/export assumptions; not wired into this CLI |
 | Octree-GS / Octree-AnyGS | Explicit LOD structure for large scenes and view-dependent level selection | Additional environment/integration; use their renderer; ordinary PLY export may lose LOD/neural behavior |
 | Block-based training | Larger area by fitting overlapping local scene blocks and streaming selected blocks | Requires shared global poses, block selection, overlap treatment, normalization transforms, seam handling, and a streaming renderer |

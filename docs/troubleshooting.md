@@ -2,7 +2,9 @@
 
 | Symptom | First action |
 | --- | --- |
-| MLP route rejects TITAN RTX | Use `configs/titan.json` with gsplat, or move native MLP to Ampere+. A newer driver or architecture environment variable cannot change the GPU. |
+| MLP native override rejects TITAN RTX | Use `configs/mlp-titan.json` or `mlp-pilot.json` with `kernel_backend: auto`. `native` requires SM80+; the same MLP representation uses scalar FP32 CUDA on TITAN. |
+| BF16/WMMA compile failure on TITAN | Rerun `bash scripts/install_backend.sh mlp`, verify the compatibility patch, and run the smoke test. A TITAN build should contain no BF16/WMMA kernels. Do not force the native build on SM75. |
+| MLP source has unrecognized edits or a partial patch | Preserve your edited checkout and reinstall from the pinned source. The installer accepts only pristine or exactly patched source and does not discard unknown edits. |
 | `nvcc` missing / CUDA mismatch | Activate the right conda environment, `export CUDA_HOME="$CONDA_PREFIX"`, check `which nvcc`, `nvcc --version`, and `python -c 'import torch; print(torch.version.cuda)'`. Use the matching environment file. |
 | Conda cannot solve the environment | Use Miniforge/conda-forge on Linux x86-64, try `conda env create --solver libmamba -f environment.yml`, and inspect package availability. Do not silently substitute CUDA 13 for the pinned 12.x extension build. |
 | CPU SIFT is slow | Enable `sfm.use_gpu` only with a CUDA-capable COLMAP build; otherwise use fewer redundant frames for a pilot. Many distro/conda builds are CPU-only. |

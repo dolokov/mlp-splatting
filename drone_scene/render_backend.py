@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .backends import checkpoint, upstream
+from .backends import checkpoint, gpu_check, mlp_requested, upstream
 from .common import PipelineError, read_json, write_json
 from .trajectory import interpolate, select_clip
 
@@ -101,6 +101,8 @@ def gsplat_frames(cfg, work):
 def mlp_frames(cfg, work):
     import torch
 
+    # Also dispatch correctly when this renderer is invoked directly for a manual resume.
+    os.environ.update(gpu_check("mlp", mlp_kernel_backend=mlp_requested(cfg)))
     repo = upstream("mlp")
     sys.path.insert(0, str(repo))
     from scannet.camera import validate_checkpoint_calibration

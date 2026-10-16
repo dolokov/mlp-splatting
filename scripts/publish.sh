@@ -10,7 +10,7 @@ gh auth status
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git init -b main
 fi
-git add -- README.md docs drone_scene scripts tests configs .github .gitignore \
+git add -- README.md docs drone_scene scripts tests configs patches .github .gitignore .gitattributes \
   LICENSE pyproject.toml environment.yml environment.mlp.yml requirements-gsplat.txt upstreams.lock.json
 if ! git diff --cached --quiet; then
   git commit -m 'Add multi-video COLMAP, MLP-Splatting and TITAN Gaussian pipeline'

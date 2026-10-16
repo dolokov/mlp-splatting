@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "upstream_commit": "426e0a24a02124bb07ce0f35e67bb241fba484d4",
+  "patch": "mlp-turing-v1.patch",
+  "patch_sha256": "ba3865a49268e750309416c624a42e4a81a365ac277bb605fb164ffbf099bc6f",
+  "files": {
+    "scannet/cumodel.py": {
+      "original_sha256": "07b9ddda5142d67eca533ed3e91e41160770c1d9cf5e8298c78dc5042f7f80a9",
+      "patched_sha256": "50ceaf6833eaac0f0735776c1f375b4c4835188de7e6f1c361953517edc71d79"
+    },
+    "scannet/cuda/np_tile_kernels.cu": {
+      "original_sha256": "b57ac668fc95c8c1fbd1b888c0caabf126ae1a65a676d37f727ad99dba8e8841",
+      "patched_sha256": "c9f7aaba29ba68233ef9e431cb1f411142302634f1da8c0880b9e8a38918de23"
+    }
+  }
+}

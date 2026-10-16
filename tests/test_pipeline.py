@@ -90,12 +90,34 @@ def test_workspace_cannot_reingest_its_rendered_videos(tmp_path):
     assert code == 2
 
 
-def test_native_mlp_rejects_turing_before_compilation(monkeypatch):
+def test_native_mlp_can_be_required_but_auto_accepts_turing(monkeypatch):
     cuda = SimpleNamespace(is_available=lambda: True, get_device_capability=lambda: (7, 5),
-                           get_device_name=lambda: "NVIDIA TITAN RTX")
-    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=cuda))
-    with pytest.raises(PipelineError, match="Ampere"):
-        backends.gpu_check("mlp")
+                           get_device_name=lambda: "NVIDIA TITAN RTX",
+                           mem_get_info=lambda: (20 * 2**30, 24 * 2**30))
+    torch = SimpleNamespace(cuda=cuda, __version__="2.10.0+cu128", version=SimpleNamespace(cuda="12.8"))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setattr(backends.shutil, "which", lambda _: "/conda/bin/nvcc")
+    monkeypatch.setattr(backends, "checked_output", lambda _: "Cuda compilation tools, release 12.8, V12.8")
+    with pytest.raises(PipelineError, match="8.0"):
+        backends.gpu_check("mlp", mlp_kernel_backend="native")
+    env = backends.gpu_check("mlp")
+    assert env["MLPSP_CUDA_BACKEND"] == "turing"
+    assert env["TORCH_CUDA_ARCH_LIST"] == "7.5"
+
+
+@pytest.mark.parametrize("capability,expected", [((7, 5), "turing"), ((8, 0), "native"),
+                                                ((8, 6), "native"), ((9, 0), "native"),
+                                                ((12, 0), "native")])
+def test_mlp_auto_selects_backend_by_actual_compute_capability(capability, expected):
+    assert backends.select_mlp_backend(capability) == expected
+
+
+def test_mlp_smoke_plan_needs_no_gpu_and_creates_no_files(tmp_path, capsys):
+    work = tmp_path / "smoke"
+    assert main(["smoke", "--config", str(ROOT / "configs/mlp-pilot.json"),
+                 "--workspace", str(work), "--dry-run"]) == 0
+    assert not work.exists()
+    assert "backpropagate" in capsys.readouterr().out
 
 
 def test_gsplat_checks_actual_toolkit_not_nvidia_smi(monkeypatch):

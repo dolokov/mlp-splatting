@@ -60,7 +60,8 @@ def run_pipeline(args, cfg, runner):
         raise PipelineError("Input videos must be outside the generated workspace.")
     last = STAGES.index(args.until)
     if not runner.dry_run:
-        backends.doctor(cfg["backend"], preprocessing_only=last < 3)
+        backends.doctor(cfg["backend"], preprocessing_only=last < 3,
+                         mlp_kernel_backend=backends.mlp_requested(cfg))
     lock = read_json(backends.ROOT / "upstreams.lock.json")
     extraction_sig = {"inputs": source_identity(videos), "settings": cfg["extraction"]}
     sfm_sig = {"extraction": digest(extraction_sig), "settings": cfg["sfm"]}
@@ -92,7 +93,7 @@ def run_pipeline(args, cfg, runner):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Multiple MP4s → one connected scene → native splats")
-    parser.add_argument("command", choices=("doctor", "run", "render", "view"))
+    parser.add_argument("command", choices=("doctor", "run", "render", "view", "smoke"))
     parser.add_argument("--config", type=Path, default=backends.ROOT / "configs" / "titan.json")
     parser.add_argument("--workspace", type=Path, default=Path("work/site"))
     parser.add_argument("--videos", nargs="+")
@@ -103,11 +104,20 @@ def main(argv=None):
     try:
         cfg = load_config(args.config.expanduser().resolve())
         if args.command == "doctor":
-            backends.doctor(cfg["backend"], args.preprocessing_only)
+            backends.doctor(cfg["backend"], args.preprocessing_only,
+                             mlp_kernel_backend=backends.mlp_requested(cfg))
             return 0
         work = workspace(args.workspace, args.dry_run)
         runner = Runner(work, dry_run=args.dry_run)
-        if args.command == "run":
+        if args.command == "smoke":
+            if cfg["backend"] != "mlp":
+                raise PipelineError("smoke requires --config configs/mlp-pilot.json (or another MLP config)")
+            if args.dry_run:
+                print("Plan: select MLP CUDA build; compile, render, backpropagate, update, save and reload a toy scene.")
+            else:
+                from .mlp_smoke import run as run_smoke
+                run_smoke(cfg, work)
+        elif args.command == "run":
             run_pipeline(args, cfg, runner)
         else:
             if not args.dry_run:

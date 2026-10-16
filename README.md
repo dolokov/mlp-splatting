@@ -2,15 +2,45 @@
 
 **Turn multiple overlapping MP4 drone videos into one connected reconstruction, train native MLP-Splatting or Gaussian splats, and render an RGB flythrough.** Linux, one NVIDIA GPU, FFmpeg, COLMAP, and conda.
 
-## Start here: your TITAN RTX
+## Start here: MLP-Splatting on your TITAN RTX
 
-Your GPU is **Turing, compute capability 7.5, 24 GB**. The upstream MLP-Splatting README specifies **8.0+ for its supplied configurations**. This project deliberately supports its native MLP route on Ampere or newer; it does **not** claim an untested Turing port. `TORCH_CUDA_ARCH_LIST=7.5` cannot add missing GPU instructions.
+Your GPU is **Turing, compute capability 7.5, 24 GB**. This repository now patches the pinned upstream renderer so the **same MLP representation can train and render on Turing using its FP32 CUDA kernels**. Ampere-or-newer GPUs retain the full native build, including the optional WMMA/BF16 entrypoints. There is no automatic conversion to Gaussians.
 
-For your current workstation, start with the included **gsplat 3D Gaussian route**. It uses a CUDA 12.6 / PyTorch 2.7.1 stack that targets Turing. For native MLPs, use the separate CUDA 12.8 / PyTorch 2.10 environment and an Ampere-or-newer GPU. These are separate representations and environments; the pipeline never silently changes your selected backend.
+| Actual GPU capability | `training.mlp.kernel_backend: auto` selects | Implementation |
+| --- | --- | --- |
+| 7.5, including TITAN RTX | `turing` | Upstream scalar FP32 forward/backward; WMMA and BF16 code excluded at compile time |
+| 8.0 or higher | `native` | Full upstream CUDA build and its original optional WMMA entrypoints |
+| Below 7.5 | Error | Outside this pipeline's supported GPU target |
+
+The MLP environment stays **CUDA 12.8 / PyTorch 2.10** on both GPU families. The patch changes compilation/dispatch, not the scene equations, native checkpoint schema, or restricted checkpoint-loading rules. FP32 is the pipeline's training precision on both paths. The TITAN path does not call CSR/Triton kernels. Expect it to be slower than an optimized tensor-core workflow; no speed or maximum scene size is promised.
 
 The `CUDA 13.4` line in `nvidia-smi` describes the driver's supported CUDA level. It does not say which `nvcc` toolkit is installed. Keep the recent driver; install the specified toolkit inside conda. There is no need to downgrade the system driver.
 
-## 1. Install once
+```bash
+conda env create -f environment.mlp.yml
+conda activate drone-scene-mlp
+export CUDA_HOME="$CONDA_PREFIX"
+bash scripts/install_backend.sh mlp
+
+# Compile and exercise the real MLP kernels without a video or COLMAP solve:
+drone-scene smoke --config configs/mlp-pilot.json --workspace work/mlp-smoke
+
+# First end-to-end test with a few overlapping clips:
+drone-scene run --config configs/mlp-pilot.json \
+  --videos /data/drone/pilot --workspace work/mlp-pilot
+
+# Larger run after checking the pilot:
+drone-scene run --config configs/mlp-titan.json \
+  --videos /data/drone/full-capture --workspace work/mlp-site
+```
+
+The first use compiles CUDA code and can take several minutes. The 2,000-iteration pilot is a setup/capture check. The full TITAN recipe uses 768 px images, a 750-frame budget, 64 points per octree leaf, and 30,000 iterations as conservative starting settings. These are not memory/performance guarantees.
+
+**Validation boundary:** CPU regression and preprocessor checks pass; this conversation has no NVIDIA device or toolkit, so the new SM75 binary has not been compiled or executed here. Run the smoke test before spending time on reconstruction. It validates finite RGB/gradients, loss improvement, the selected binary's entrypoints, and the actual upstream inference checkpoint round-trip. The report goes to `work/mlp-smoke/smoke.json`.
+
+The final scene is `work/mlp-site/model/mlp/scene_ckpt.pt`. `execution.json` next to it records the selected CUDA build and patch pin. Render it with the same config using `drone-scene render`. See [the compatibility implementation](docs/mlp-turing.md) for patch verification, native overrides, and how to test an existing installation.
+
+## Gaussian alternative: install once
 
 Extract this repository and open its root directory. Install [Miniforge](https://github.com/conda-forge/miniforge) if you do not have conda. The environment files target Linux x86-64.
 
@@ -25,7 +55,7 @@ The installer clones exact upstream commits into `third_party/`, installs PyTorc
 
 `environment.yml` and the backend pins specify a reproducible starting stack, not a solved package lock for every Linux distribution. The conda solve, CUDA build, and GPU execution must be verified on your workstation. See [validation status](docs/validation.md).
 
-## 2. Run a small pilot end to end
+## Gaussian alternative: run a small pilot end to end
 
 Put **two or more overlapping clips of the same static place** in `/data/drone/pilot/`. About 1–2 minutes per clip is a useful first experiment. Shell paths with spaces work. The pipeline discovers `.mp4` and `.MP4` recursively.
 
@@ -52,7 +82,7 @@ Useful outputs:
 
 Open the PLY in [SuperSplat](https://superspl.at/editor) for browser inspection/editing. This PLY contains Gaussian scale, rotation, opacity, and spherical harmonics; it is not a triangle mesh or an MLP checkpoint.
 
-## 3. Run the larger scene
+## Gaussian alternative: run the larger scene
 
 ```bash
 drone-scene run \
@@ -119,9 +149,9 @@ Inputs are identified by absolute path, size, and modification time, not a full 
 
 ## Native MLP-Splatting route
 
-This is the actual [kxhit/mlp-splatting](https://github.com/kxhit/mlp-splatting) code, pinned in `upstreams.lock.json`, with RGB-only supervision and native COLMAP intrinsics. It does not require LSeg/SAM features. It is an experimental outdoor starting recipe; the supplied upstream scenes are Replica/ScanNet, and this project makes no city-scale quality or speed claim.
+This is the actual [kxhit/mlp-splatting](https://github.com/kxhit/mlp-splatting) code, pinned in `upstreams.lock.json`, with a checked compatibility patch, RGB-only supervision, and native COLMAP intrinsics. It does not require LSeg/SAM features. It is an experimental outdoor starting recipe; the supplied upstream scenes are Replica/ScanNet, and this project makes no city-scale quality or speed claim.
 
-**Run this on an Ampere-or-newer GPU, not your TITAN RTX:**
+For **automatic selection on either GPU family**, use `configs/mlp-pilot.json` or `configs/mlp-titan.json` as shown above. To **require the full native build on an 8.0+ card**, use `configs/mlp-ampere.json`:
 
 ```bash
 conda env create -f environment.mlp.yml
@@ -133,7 +163,7 @@ drone-scene run --config configs/mlp-ampere.json \
   --videos /data/drone/overlapping-clips --workspace work/mlp-site
 ```
 
-The final native checkpoint is `work/mlp-site/model/mlp/scene_ckpt.pt`. The renderer loads that representation directly and makes an MP4 from interpolated poses. It does not rename/convert it to Gaussian PLY. All views must share one calibration; digital zoom, different lenses, or independently calibrated clips require the gsplat route or upstream loader changes.
+The final native checkpoint is `work/mlp-site/model/mlp/scene_ckpt.pt`, regardless of which CUDA build was selected. The renderer loads that representation directly and makes an MP4 from interpolated poses. It does not rename/convert it to Gaussian PLY. All views must share one calibration; digital zoom, different lenses, or independently calibrated clips require the gsplat route or upstream loader changes. A `native` override on TITAN RTX fails explicitly; use `auto` or `turing`.
 
 The upstream MLP loader stacks **all float RGB images in host RAM**, then copies a split. The pipeline prints an estimate and rejects training if its conservative RAM budget exceeds available memory. With many views, reduce resolution/frame count or plan loader/partitioning work before attempting the entire capture. Increasing `points_per_leaf` reduces initial neural primitive count; it does not implement streaming or LOD.
 
@@ -160,6 +190,6 @@ python -m pytest -q
 ruff check drone_scene tests
 ```
 
-CPU tests cover binary camera/observation preservation, component coverage, cross-flight matching, stale cache rejection, trajectory rotations, command construction, and real FFmpeg video extraction/encoding. GPU installation/training is a separate workstation validation step. The CI workflow runs CPU checks, not expensive reconstruction/training.
+CPU tests cover binary camera/observation preservation, component coverage, cross-flight matching, stale cache rejection, trajectory rotations, command construction, real FFmpeg video extraction/encoding, exact patch application, and both CUDA build selections. C++ preprocessing verifies native kernel preservation and Turing's WMMA/BF16 exclusion. An opt-in test runs the real GPU smoke check; see [validation status](docs/validation.md). The standard CI workflow runs CPU checks.
 
-This repository's orchestration code is MIT licensed. Upstream repositories/dependencies retain their own licenses. Native MLP-Splatting is MIT; gsplat is Apache-2.0. Review third-party terms before redistribution. See [sources and pins](docs/sources.md).
+This repository's orchestration code is MIT licensed. Upstream repositories/dependencies retain their own licenses. Native MLP-Splatting is MIT; gsplat is Apache-2.0. The compressed pinned-source regression fixture retains upstream attribution and notices in `tests/fixtures/`. Review third-party terms before redistribution. See [sources and pins](docs/sources.md).

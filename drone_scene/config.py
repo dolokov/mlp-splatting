@@ -48,6 +48,8 @@ def load_config(path):
         raise PipelineError("test_every must be >=2 and cap_max must be >=100")
     if t["gsplat"]["sh_degree"] not in range(4):
         raise PipelineError("sh_degree must be 0..3")
+    if t["mlp"].get("kernel_backend", "auto") not in {"auto", "native", "turing"}:
+        raise PipelineError("training.mlp.kernel_backend must be auto, native, or turing")
     if r["trajectory"] not in {"interp", "ellipse", "spiral"}:
         raise PipelineError("trajectory must be interp, ellipse, or spiral")
     return cfg

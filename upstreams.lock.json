@@ -7,6 +7,10 @@
   },
   "mlp": {
     "url": "https://github.com/kxhit/mlp-splatting.git",
-    "commit": "426e0a24a02124bb07ce0f35e67bb241fba484d4"
+    "commit": "426e0a24a02124bb07ce0f35e67bb241fba484d4",
+    "compatibility_patch": {
+      "manifest": "patches/mlp-turing-v1.json",
+      "sha256": "ba3865a49268e750309416c624a42e4a81a365ac277bb605fb164ffbf099bc6f"
+    }
   }
 }
