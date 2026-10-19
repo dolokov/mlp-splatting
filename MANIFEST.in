@@ -5,3 +5,9 @@ recursive-include scripts *.py
 recursive-include assets *.svg
 recursive-include tests *.py
 recursive-include licenses *.txt *.md
+
+include environment.yml environment.mlp.yml requirements-gsplat.txt upstreams.lock.json
+recursive-include docs *.md
+recursive-include patches *
+recursive-include scripts *.sh
+recursive-include tests/fixtures *

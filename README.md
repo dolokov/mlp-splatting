@@ -192,3 +192,16 @@ The code license does not relicense datasets or third-party model weights.
 ```
 
 See [CITATION.cff](CITATION.cff) for citation-manager metadata.
+
+
+## Drone scene pipeline
+
+This repository also includes a multi-video drone reconstruction pipeline,
+TITAN/Turing compatibility tooling, and a browser viewer. See the
+[drone scene pipeline guide](docs/drone-scene-pipeline.md) for installation,
+capture, reconstruction, training, and viewing instructions.
+
+Installing this package also provides the `drone-scene` command. The pipeline
+uses a separately pinned renderer checkout under `third_party/`; the integration
+does not automatically apply its compatibility patches to the renderer at the
+repository root. Follow the guide for backend installation.

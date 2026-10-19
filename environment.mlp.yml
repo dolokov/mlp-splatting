@@ -1,0 +1,22 @@
+name: mlp
+channels:
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.11
+  - pip>=24
+  - colmap=3.11.1
+  - ffmpeg=7.1
+  - cuda-toolkit=12.8
+  - gcc_linux-64=12
+  - gxx_linux-64=12
+  - cmake>=3.24
+  - ninja
+  - git
+  - pip:
+      - numpy==1.26.4
+      - Pillow==11.1.0
+      - scipy==1.15.2
+      - pytest==8.3.5
+# Then: bash scripts/install_backend.sh mlp
+# Automatically selects the FP32 Turing build on SM75 and full native build on SM80+.

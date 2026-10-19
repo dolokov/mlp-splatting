@@ -30,3 +30,16 @@ profile/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Drone pipeline inputs and generated files
+third_party/
+work/
+data/
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.ply
+*.db
+*.zip
+*.bundle

@@ -1,0 +1,155 @@
+--- a/scannet/cumodel.py
++++ b/scannet/cumodel.py
+@@ -98,6 +98,21 @@
+     maxrreg_raw = os.environ.get("MLPSP_NVCC_MAXRREGCOUNT", "").strip()
+     extra_cuda_cflags = []
+     suffix = "default"
++    # Portable FP32 build for Turing; keep the full upstream build on SM80+.
++    requested = os.environ.get("MLPSP_CUDA_BACKEND", "auto").strip().lower()
++    if requested not in {"auto", "native", "turing"}:
++        raise ValueError("MLPSP_CUDA_BACKEND must be auto, native, or turing")
++    capability = torch.cuda.get_device_capability()
++    if capability < (7, 5):
++        raise RuntimeError("MLP CUDA requires compute capability 7.5 or newer")
++    if requested == "native" and capability < (8, 0):
++        raise RuntimeError("The full native WMMA build requires compute capability 8.0+")
++    turing = requested == "turing" or (requested == "auto" and capability < (8, 0))
++    if turing:
++        if os.environ.get("MLPSP_TRAINING_BACKEND", "legacy") != "legacy":
++            raise RuntimeError("Turing MLP uses the legacy FP32 CUDA backward; CSR/Triton is unsupported")
++        extra_cuda_cflags.append("-DMLPSP_TURING_COMPAT=1")
++        suffix += "_turing_fp32_v1"
+     # Independent of per-pixel CSR hit capacity. Keep overflow rejection enabled.
+     tile_candidates = int(os.environ.get("MLPSP_TILE_CANDIDATE_CAPACITY", "1536"))
+     if tile_candidates not in {768, 1536}:
+--- a/scannet/cuda/np_tile_kernels.cu
++++ b/scannet/cuda/np_tile_kernels.cu
+@@ -9,7 +9,13 @@
+ #include <cuda.h>
+ #include <cuda_runtime.h>
+ #include <cuda_fp16.h>
++// The wrapper selects this build on SM75. SM80+ keeps every upstream kernel.
++#ifndef MLPSP_TURING_COMPAT
++#define MLPSP_TURING_COMPAT 0
++#endif
++#if !MLPSP_TURING_COMPAT
+ #include <cuda_bf16.h>
++#endif
+ 
+ // Block radix sort (CUB)
+ #include <cub/block/block_radix_sort.cuh>
+@@ -191,11 +197,13 @@
+   return __half2float(v);
+ }
+ 
++#if !MLPSP_TURING_COMPAT
+ template <>
+ // EN: Converts bfloat16 scalar to float.
+ __device__ __forceinline__ float scalar_to_float<__nv_bfloat16>(__nv_bfloat16 v) {
+   return __bfloat162float(v);
+ }
++#endif
+ 
+ template <typename T>
+ // EN: Loads one scalar from memory and returns it as float.
+@@ -226,6 +234,7 @@
+   return acc;
+ }
+ 
++#if !MLPSP_TURING_COMPAT
+ template <>
+ // EN: Optimized row dot product for bfloat16 weights using vectorized loads.
+ __device__ __forceinline__ float row_dot_vec<__nv_bfloat16>(const __nv_bfloat16* w, const float* x, int n) {
+@@ -240,6 +249,7 @@
+   if (i < n) acc = fmaf(__bfloat162float(w[i]), x[i], acc);
+   return acc;
+ }
++#endif
+ 
+ template <typename WType>
+ // EN: Strided copy from typed weights to float buffer.
+@@ -261,6 +271,7 @@
+   if (i < n) dst[i] = __half2float(src[i]);
+ }
+ 
++#if !MLPSP_TURING_COMPAT
+ template <>
+ // EN: Strided cast-copy specialized for bfloat16 using packed conversion.
+ __device__ __forceinline__ void cast_copy_strided<__nv_bfloat16>(float* dst, const __nv_bfloat16* src, int n, int tid, int stride) {
+@@ -274,6 +285,7 @@
+   }
+   if (i < n) dst[i] = __bfloat162float(src[i]);
+ }
++#endif
+ 
+ // EN: Warp-aggregated atomic add to reduce atomic contention on float grads.
+ // EN: Threads targeting the same address are reduced first, then one atomicAdd is issued.
+@@ -5323,6 +5335,7 @@
+           (float)threshold,
+           rgb.data_ptr<float>(), alpha.data_ptr<float>());
+     } else {
++#if !MLPSP_TURING_COMPAT
+         render_tiles_kernel_tilecenter_order<__nv_bfloat16><<<grid, block, shared_bytes, at::cuda::getCurrentCUDAStream()>>>(
+           rays_o.data_ptr<float>(),
+           rays_d.data_ptr<float>(),
+@@ -5341,6 +5354,9 @@
+           (int)Wimg, (int)Himg, (int)TW, (int)TH,
+           (float)threshold,
+           rgb.data_ptr<float>(), alpha.data_ptr<float>());
++#else
++      TORCH_CHECK(false, "Turing MLP requires float32/float16 weights; BF16 needs the native SM80+ build");
++#endif
+     }
+     AT_CUDA_CHECK(cudaGetLastError());
+     return {rgb, alpha};
+@@ -6856,6 +6872,7 @@
+         grad_quats.data_ptr<float>(),
+         hit_overflow_ptr);
+     } else {
++#if !MLPSP_TURING_COMPAT
+       render_tiles_backward_tilecenter_full<__nv_bfloat16, false><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+         rays_o.data_ptr<float>(),
+         rays_d.data_ptr<float>(),
+@@ -6883,6 +6900,9 @@
+         grad_log_scales.data_ptr<float>(),
+         grad_quats.data_ptr<float>(),
+         hit_overflow_ptr);
++#else
++      TORCH_CHECK(false, "Turing MLP requires float32/float16 weights; BF16 needs the native SM80+ build");
++#endif
+     }
+     AT_CUDA_CHECK(cudaGetLastError());
+ #if MLPSP_TILECENTER_MAX_HITS < 512
+@@ -7218,12 +7238,18 @@
+ 
+ // EN: Binds CUDA wrapper functions into the Python extension module.
+ #include "primitive_records.cuh"
++#if !MLPSP_TURING_COMPAT
+ #include "rgb_wmma.cuh"
+ #include "training_wmma.cuh"
++#endif
+ 
+ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
++#if !MLPSP_TURING_COMPAT
+   m.def("rgb_wmma_safety_stats", &rgb_wmma_safety_stats, "RGB WMMA call/fallback counters");
++#endif
++#if !MLPSP_TURING_COMPAT
+   m.def("training_wmma_safety_stats", &training_wmma_safety_stats, "Training WMMA [calls, frame_fallbacks, fp32_nonfinite_failures, count_emit_failures, capacity_failures]");
++#endif
+   m.def("render_tiles_autograd", &render_tiles_autograd_wrapper, "Legacy tile forward; parameter gradients are not implemented");
+   m.def("render_tiles_autograd_tilecenter", &render_tiles_autograd_tilecenter_wrapper, "Legacy tile-center forward; parameter gradients are not implemented");
+   m.def("render_tiles_autograd_tilecenter_presorted", &render_tiles_autograd_tilecenter_presorted_wrapper, "Tile MLP splatting (prim-major, presorted per-tile list; intended for globaldepth ordering)");
+@@ -7243,9 +7269,13 @@
+   m.def("render_tiles_backward_tilecenter_full_with_feat", &render_tiles_backward_tilecenter_full_with_feat_wrapper, "Fused RGB and feature-attribute tile-center backward");
+   m.def("render_tiles_mlp_records", &render_tiles_mlp_records_wrapper, "Exact tile-center MLP records");
+   m.def("render_tiles_training_records", &render_tiles_training_records_wrapper, "Reusable forward training records");
++#if !MLPSP_TURING_COMPAT
+   m.def("render_tiles_training_records_wmma", &render_tiles_training_records_wmma_wrapper, "Opt-in tile-cooperative Tensor Core training forward records; same eight-tensor schema");
++#endif
+   m.def("primitive_records_reverse", &primitive_records_reverse_wrapper, "Reverse FP32 compositing over saved records");
++#if !MLPSP_TURING_COMPAT
+   m.def("render_tiles_rgb_wmma", &render_tiles_rgb_wmma_wrapper, "Cooperative tile RGB MMA");
++#endif
+   m.def("render_tiles_backward_tilecenter_traversal", &render_tiles_backward_tilecenter_traversal_wrapper, "Tile splatting backward traversal-only (tilecenter profiling)");
+   m.def("render_tiles_backward_tilecenter_backprop_noatomic", &render_tiles_backward_tilecenter_backprop_noatomic_wrapper, "Tile splatting backward backprop-only (tilecenter profiling, no atomics)");
+   m.def("_test_atomic_add_warp_agg", &test_atomic_add_warp_agg_wrapper, "Internal sparse-peer warp atomic test hook");

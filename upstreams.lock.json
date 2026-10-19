@@ -1,0 +1,16 @@
+{
+  "checked": "2026-10-16",
+  "gsplat": {
+    "url": "https://github.com/nerfstudio-project/gsplat.git",
+    "commit": "937e29912570c372bed6747a5c9bf85fed877bae",
+    "tag": "v1.5.3"
+  },
+  "mlp": {
+    "url": "https://github.com/kxhit/mlp-splatting.git",
+    "commit": "426e0a24a02124bb07ce0f35e67bb241fba484d4",
+    "compatibility_patch": {
+      "manifest": "patches/mlp-turing-v1.json",
+      "sha256": "ba3865a49268e750309416c624a42e4a81a365ac277bb605fb164ffbf099bc6f"
+    }
+  }
+}

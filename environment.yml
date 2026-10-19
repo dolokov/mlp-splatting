@@ -1,0 +1,23 @@
+name: drone-scene
+channels:
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.10
+  - pip>=24
+  - colmap=3.11.1
+  - ffmpeg=7.1
+  - cuda-toolkit=12.6
+  - gcc_linux-64=12
+  - gxx_linux-64=12
+  - cmake>=3.24
+  - ninja
+  - git
+  - pip:
+      - numpy==1.26.4
+      - Pillow==11.1.0
+      - pytest==8.3.5
+      - ruff==0.11.2
+# Then: bash scripts/install_backend.sh gsplat
+# PyTorch must be installed before compiling gsplat and fused-ssim.
+# CUDA 13.4 printed by nvidia-smi is driver capability, not the build toolkit.
