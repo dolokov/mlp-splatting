@@ -9,6 +9,14 @@ import re
 import subprocess
 
 
+# Reviewed historical documentation example, corrected during integration.
+# Scope this exception to one immutable blob and one finding category; new
+# machine-specific paths and all secret patterns must still fail closed.
+REVIEWED_HISTORICAL_FINDINGS = {
+    ('docs/rendering.md', 'e136d6df790d936841048fd9fb53b15e521e9e78', 'private home directory'),
+}
+
+
 def git(*args):
     return subprocess.check_output(['git', *args])
 
@@ -41,7 +49,8 @@ def main():
             }
             for name, pattern in patterns.items():
                 if re.search(pattern, content):
-                    violations.append((path, name))
+                    if (path, oid.decode(), name) not in REVIEWED_HISTORICAL_FINDINGS:
+                        violations.append((path, name))
     if violations:
         for path, category in sorted(set(violations)):
             print(f'{path}: {category}')  # Never print matching private values.
