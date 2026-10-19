@@ -70,11 +70,12 @@ class Runner:
                 raise PipelineError(f"Command failed ({code}); see {logs / 'console.log'}")
 
 
-def checked_output(command):
+def checked_output(command, *, include_stderr=False):
+    """Return stdout, optionally including stderr for tools that print help there."""
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise PipelineError(f"Command failed: {shlex.join(map(str, command))}\n{result.stderr[-2000:]}")
-    return result.stdout
+    return result.stdout + result.stderr if include_stderr else result.stdout
 
 
 def stage(runner, name, signature, outputs, action):

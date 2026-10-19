@@ -68,18 +68,73 @@ def image_quality(path):
     return float(lap.var()), gray, size
 
 
+def select_frames(sampled, cfg, runners_up=None):
+    """Select chronologically, ranking within windows; only buffer one window's thumbnails."""
+    window = cfg.get("selection_window_seconds", 0)
+    dropped = {"blur": 0, "duplicate": 0}
+    if window:
+        dropped["window"] = 0
+    selected, dimensions = [], set()
+    previous = None
+
+    def choose(candidates):
+        nonlocal previous
+        winner = None
+        for image, score, thumbnail, size, timestamp in sorted(
+                candidates, key=lambda item: (-item[1], item[4])):
+            if winner is not None:
+                dropped["window"] += 1
+                reason = "window"
+            elif (previous is not None
+                  and float(np.abs(thumbnail - previous).mean()) < cfg["dedup_mae"]):
+                dropped["duplicate"] += 1
+                reason = "duplicate"
+            else:
+                winner = image
+                previous = thumbnail
+                dimensions.add(size)
+                selected.append({"name": image.name, "timestamp_seconds": timestamp,
+                                 "sharpness": score})
+                continue
+            if runners_up is not None and len(runners_up) < 200:
+                runners_up.append({"name": image.name, "timestamp_seconds": timestamp,
+                                   "sharpness": score, "reason": reason})
+            image.unlink()
+
+    bucket, pending = None, []
+    for index, image in enumerate(sampled):
+        timestamp = index / cfg["fps"]
+        current = math.floor(timestamp / window) if window else index
+        if bucket is not None and current != bucket:
+            choose(pending)
+            pending = []
+        bucket = current
+        score, thumbnail, size = image_quality(image)
+        if score < cfg["min_sharpness"]:
+            dropped["blur"] += 1
+            image.unlink()
+        else:
+            pending.append((image, score, thumbnail, size, timestamp))
+    choose(pending)
+    return selected, dropped, dimensions
+
+
 def extract(runner, videos, cfg):
     raw = runner.work / "raw"
     if runner.dry_run:
-        print(f"Sample {len(videos)} clips at {cfg['fps']} FPS; cap {cfg['max_frames']} frames total.")
+        print(f"Sample {len(videos)} clips at {cfg['fps']} FPS; cap {cfg['max_frames']} retained frames; "
+              f"selection window {cfg.get('selection_window_seconds', 0)} seconds; "
+              f"candidate cap {cfg.get('max_candidates', cfg['max_frames'])}.")
         return
     metadata = [probe(p) for p in videos]
     # Guard against accidentally decoding hours at full rate; reject rather than truncate clips.
     estimated = sum(math.ceil(m["duration"] * cfg["fps"]) for m in metadata)
-    if estimated > cfg["max_frames"]:
+    candidate_limit = cfg.get("max_candidates", cfg["max_frames"])
+    if estimated > candidate_limit:
         raise PipelineError(
-            f"Sampling would create about {estimated} frames (limit {cfg['max_frames']}). "
-            "Lower extraction.fps, trim a pilot, or explicitly raise extraction.max_frames. "
+            f"Sampling would create about {estimated} frames (candidate limit {candidate_limit}). "
+            "Lower extraction.fps, trim a pilot, or explicitly raise extraction.max_candidates "
+            "(defaults to extraction.max_frames). "
             "No clips have been silently shortened."
         )
     tmp = runner.work / "raw.partial"
@@ -87,6 +142,7 @@ def extract(runner, videos, cfg):
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
     report = {"videos": [], "retained": {}}
+    total_kept = 0
     for i, (video, meta) in enumerate(zip(videos, metadata)):
         clip = clip_id(video, i)
         folder = tmp / clip
@@ -97,24 +153,17 @@ def extract(runner, videos, cfg):
         runner.run(["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-i", video,
                     "-map", "0:v:0", "-vf", vf, "-q:v", "2", "-threads", "2",
                     "-fps_mode", "vfr", folder / "%08d.jpg"])
-        kept, dropped = [], {"blur": 0, "duplicate": 0}
-        previous = None
-        dimensions = set()
         sampled = sorted(folder.glob("*.jpg"))
-        for image in sampled:
-            sharpness, thumbnail, size = image_quality(image)
-            reason = None
-            if sharpness < cfg["min_sharpness"]:
-                reason = "blur"
-            elif previous is not None and float(np.abs(thumbnail - previous).mean()) < cfg["dedup_mae"]:
-                reason = "duplicate"
-            if reason:
-                image.unlink()
-                dropped[reason] += 1
-            else:
-                previous = thumbnail
-                kept.append(f"{clip}/{image.name}")
-                dimensions.add(size)
+        if sum(v["sampled"] for v in report["videos"]) + len(sampled) > candidate_limit:
+            raise PipelineError("Actual decoded candidate count exceeds extraction.max_candidates")
+        runners_up = []
+        selected, dropped, dimensions = select_frames(sampled, cfg, runners_up)
+        kept = [f"{clip}/{frame['name']}" for frame in selected]
+        total_kept += len(kept)
+        if total_kept > cfg["max_frames"]:
+            raise PipelineError("Selected frames exceed extraction.max_frames; increase the selection "
+                                "window, lower fps, or raise the retained-frame limit. No clips have "
+                                "been silently shortened.")
         if len(kept) < 8:
             raise PipelineError(f"Only {len(kept)} usable frames in {video}; need >=8. Check quality settings.")
         if len(dimensions) != 1:
@@ -122,6 +171,12 @@ def extract(runner, videos, cfg):
         report["retained"][clip] = kept
         report["videos"].append({"source": str(video), "clip": clip, **meta,
                                   "sampled": len(sampled), "kept": len(kept),
+                                   "selected": selected,
+                                   "runners_up": runners_up,
+                                   "selection_window_seconds": cfg.get("selection_window_seconds", 0),
+                                   "max_gap_seconds": max((b["timestamp_seconds"] - a["timestamp_seconds"]
+                                                           for a, b in zip(selected, selected[1:])),
+                                                          default=0),
                                   "dropped": dropped, "output_size": list(dimensions.pop())})
     if raw.exists():
         shutil.rmtree(raw)

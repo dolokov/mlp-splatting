@@ -10,7 +10,7 @@ Your trained representation determines which renderer can consume it. MLP-Splatt
 | Other browser Gaussian viewers | Compatible standard Gaussian PLY or converted splat format | WebGL/WebGPU on the viewer's device | External; check SH/axis/scale conventions and scene size |
 | Unity / Unreal / Blender | Gaussian PLY plus a compatible Gaussian rendering plugin | Application-specific renderer/shader | External; a PLY import alone does not create Gaussian rendering |
 | Custom native MLP interactive viewer | Native MLP checkpoint and its calibrated ray generator | Python CUDA renderer, e.g. streamed through Viser | Additional engineering; not packaged here |
-| Browser-native MLP rendering | Neural primitive geometry + MLP weights + a matching shader/runtime | Custom WebGPU/WebGL implementation | Additional engineering; inspect the authors' project demo for inspiration |
+| Browser-native MLP rendering | Exported native geometry + MLP weights | Local WebGPU reference renderer | Experimental prototype; see limitations below |
 | Metric textured mesh / orthophoto | Photogrammetry output, e.g. ODM | Blender, engine, GIS, standard mesh viewer | Separate reconstruction route; see `large-scenes.md` |
 
 ## Included offline rendering
@@ -35,8 +35,47 @@ For very large scenes, a browser/mobile viewer usually needs pruning, compressio
 
 ## Native MLP checkpoints
 
+### Experimental browser-GPU reference viewer
+
+An initial WebGPU prototype is included. It downloads exported geometry and neural
+weights once, then renders locally on the browser GPU. The HTTP server only serves
+static files; it does not render or stream frames. Export with your completed native
+inference checkpoint, original scene dataset, and training config, from the MLP environment:
+
+```bash
+python -m drone_scene.web_viewer \
+  --config /home/alex/github/mlp_splatting/configs/mlp-pilot.json \
+  --workspace /absolute/path/to/your/completed-pilot \
+  --output /absolute/path/to/a/new-webgpu-export \
+  --serve --port 8088
+```
+
+Open `http://localhost:8088/` in a WebGPU-capable browser. The page reports missing
+WebGPU/adapter support, shader compilation errors, and device loss. Do not assume
+your installed Firefox/Linux configuration exposes WebGPU. No unsafe browser flags
+or rendering fallback are enabled automatically. Stop the server with Ctrl+C.
+For an existing export, serve its directory on localhost with a static HTTP server;
+the exporter intentionally refuses to overwrite a nonempty output directory.
+
+Select a captured camera, drag to look, and use W/S, A/D, Q/E to translate. Start
+at 48–96 pixels wide and increase only after measuring render time. Save PNG captures
+the current browser image. This is a brute-force correctness-oriented implementation,
+**not a real-time performance claim**: every ray tests every primitive. It uses the
+native closest-point features, positional encoding, MLP and depth-sorted opacity
+compositing, with a black background and a decay threshold of 0.003. More than 128
+hits on a ray produce magenta instead of silently truncating. Hidden widths above
+64, more than 10 encoding frequencies, nonfinite weights, invalid quaternions, and
+nonzero camera distortion are rejected. GPU buffer limits are checked in the browser.
+
+**Validation limitation:** export packing and browser source syntax have automated
+tests. Browser shader execution, CUDA pixel parity, browser compatibility and FPS
+on your TITAN are not certified. Validate a captured view against CUDA before using
+the viewer to judge reconstruction quality. Tile culling/batched neural evaluation
+remain future optimization work. Exports contain the learned scene weights; treat
+them as scene data when sharing or hosting.
+
 The native primitive predicts view-dependent RGB and opacity using learned neural weights. Renaming the checkpoint or exporting primitive centers to `.ply` discards that learned function. No lossless standard Gaussian export is provided by this pipeline. A Gaussian approximation would require training/distillation against rendered MLP views and evaluating the resulting quality loss.
 
-The authors' interactive project demo is an example of what is possible, not an assurance that this repository ships its web runtime or that an ordinary splat viewer can open your checkpoint. Native CUDA RGB rendering is included here. Semantic feature selection/editing would additionally require feature supervision and UI work; RGB-only training does not produce those features.
+The authors' interactive project demo uses a separate runtime; the experimental viewer above is this repository's own implementation, not their web runtime. Ordinary splat viewers cannot open native checkpoints. Native CUDA RGB rendering is also included here. Semantic feature selection/editing would additionally require feature supervision and UI work; RGB-only training does not produce those features.
 
 For a native interactive viewer, reuse `mlp_frames`' checkpoint and camera setup, replace its fixed path with a Viser camera callback, and render with `scene(...)`. Respect the native camera modes and tile-capacity checks. Keep view sizes small initially. This is a development direction, not a currently implemented command.

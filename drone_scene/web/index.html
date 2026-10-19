@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Native MLP · WebGPU prototype</title>
+<style>body{background:#101827;color:#eee;font:16px system-ui;margin:24px}canvas{width:min(90vw,960px);image-rendering:pixelated;touch-action:none;background:black}button,select,input{margin:8px;padding:6px}pre{white-space:pre-wrap}a{color:#7cf}</style>
+<h1>Native MLP · browser GPU prototype</h1>
+<p>No frame streaming. Brute-force reference renderer; low resolution recommended. Magenta = more than 128 hits on a ray (unsupported, not a valid rendered pixel).</p>
+<label>Captured camera <select id="poses"></select></label><button id="reset">Reset camera</button>
+<label>Width <select id="resolution"><option>48</option><option selected>96</option><option>160</option><option>256</option></select></label>
+<label>Move speed <input id="speed" type="number" value="0.05" min="0.0001" step="0.01"></label>
+<button id="render">Render</button><button id="save">Save PNG</button>
+<p>Drag to look; W/S forward/back, A/D left/right, Q/E down/up. Camera starts at a captured view. Rendering happens on demand.</p>
+<pre id="status">Checking WebGPU…</pre><canvas id="canvas" tabindex="0"></canvas>
+<script type="module" src="viewer.js"></script></html>

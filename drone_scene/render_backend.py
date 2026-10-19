@@ -11,6 +11,7 @@ import numpy as np
 
 from .backends import checkpoint, gpu_check, mlp_requested, upstream
 from .common import PipelineError, read_json, write_json
+from .mlp_dataset import selected_image_names
 from .trajectory import interpolate, select_clip
 
 
@@ -123,7 +124,7 @@ def mlp_frames(cfg, work):
     validate_checkpoint_calibration(load_checkpoint(str(ckpt)), dataset)
     scene = _load_scene_tile_cuda(str(ckpt), torch.device("cuda:0"),
                                   cfg["training"]["mlp"]["points_per_leaf"], tile_size=8)
-    clip, indices = select_clip([Path(p).name for p in dataset.image_paths], cfg["render"].get("clip"))
+    clip, indices = select_clip(selected_image_names(dataset), cfg["render"].get("clip"))
     poses = interpolate(dataset.poses[indices].numpy(), cfg["render"]["interpolation_steps"],
                         cfg["render"]["max_frames"])
     height, width = dataset.images.shape[-2:]

@@ -35,7 +35,7 @@
     "interpolation_steps": 5,
     "max_frames": 300,
     "fps": 30,
-    "save_frames": false,
+    "save_frames": true,
     "port": 8080
   }
 }

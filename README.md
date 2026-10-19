@@ -18,7 +18,7 @@ The `CUDA 13.4` line in `nvidia-smi` describes the driver's supported CUDA level
 
 ```bash
 conda env create -f environment.mlp.yml
-conda activate drone-scene-mlp
+conda activate mlp
 export CUDA_HOME="$CONDA_PREFIX"
 bash scripts/install_backend.sh mlp
 
@@ -155,7 +155,7 @@ For **automatic selection on either GPU family**, use `configs/mlp-pilot.json` o
 
 ```bash
 conda env create -f environment.mlp.yml
-conda activate drone-scene-mlp
+conda activate mlp
 export CUDA_HOME="$CONDA_PREFIX"
 bash scripts/install_backend.sh mlp
 

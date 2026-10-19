@@ -15,6 +15,9 @@ drone-scene = "drone_scene.cli:main"
 [tool.setuptools.packages.find]
 include = ["drone_scene*"]
 
+[tool.setuptools.package-data]
+drone_scene = ["web/*.html", "web/*.js", "web/*.wgsl"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

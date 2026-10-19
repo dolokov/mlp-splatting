@@ -26,6 +26,85 @@ For a known distance or reliable GPS/control points, perform a deliberate model 
 
 ## Filtering
 
+## HTML quality diagnostics
+
+Pipeline runs generate `reports/diagnostics.html` and `reports/diagnostics.json`
+after extraction and reconstruction. HTML contains inline SVG plots, colored tables,
+bounded embedded contact sheets, temporal occupancy, sharpness, component coverage,
+stored COLMAP point-error and track-length histograms, and shared-landmark connectivity.
+It works offline without a plotting package. Failed reconstruction quality checks
+also generate a report when extraction metadata is available.
+
+Firefox opens the final applicable report in a detached process, including on a
+reconstruction failure. Pass `--no-open-report` for headless/automated runs. Missing
+Firefox produces a warning, not a failed pipeline. Dry runs do not write or open reports.
+
+Optional configuration fragments (merge into the existing sections):
+
+```json
+{
+  "extraction": {"max_gap_seconds": 4.0},
+  "sfm": {
+    "quality_gate": {
+      "max_point_error_p95": 4.0,
+      "min_median_track_length": 3.0,
+      "max_registered_gap_seconds": 6.0
+    }
+  }
+}
+```
+
+These numbers are illustrative, not tuned guarantees. Selection gap limits generate
+warnings. Explicit `quality_gate` thresholds fail before preparation/training; missing
+required metrics also fail. Existing registration and minimum-point checks remain.
+Without explicit geometry thresholds, error p95 above 4 pixels and median track
+length below 3 are warnings only. Gaps include clip boundaries. Empty windows are
+not automatically filled. Stored errors are COLMAP's per-point errors, not independently
+recomputed per-observation residuals. Cross-flight heatmap counts points observed in
+both clips; indirect connections are valid, and no minimum reliable bridge strength
+is asserted. Older extraction reports infer timestamps from filenames and configured
+FPS and are labeled approximate. Up to 200 rejected window/duplicate candidates per
+clip are recorded as runner-up metadata; rejected JPEGs remain deleted. Contact
+sheets include at most 24 evenly spaced retained views per clip.
+
+### Optional sharpest-in-window selection
+
+Existing configs retain fixed-FPS sampling. To select better nearby frames, add these
+fields to the `extraction` object in your config:
+
+```json
+{
+  "fps": 5.0,
+  "selection_window_seconds": 2.0,
+  "max_candidates": 5000,
+  "max_frames": 500
+}
+```
+
+This is a config fragment; keep the existing size and quality settings. It scores
+5 candidates per second and keeps at most one usable frame per 2-second bucket,
+including a partial final bucket. Start with 1–2 seconds rather than 10 seconds
+to avoid sacrificing viewpoint overlap. These are starting heuristics, not guarantees.
+Frames below `min_sharpness` are rejected first. Remaining candidates are ranked
+by sharpness, with earliest timestamp breaking ties. If the winner duplicates the
+previous retained frame, the next-sharpest candidate is tried. Selection never
+crosses clip boundaries, and output remains chronological.
+
+`selection_window_seconds: 0` (or omission) disables windowed selection.
+`fps` always controls candidate sampling; `max_candidates` limits decoded candidates
+across all clips and defaults to `max_frames`. `max_frames` limits retained frames.
+Exceeding either budget fails instead of silently truncating footage. Candidate
+JPEGs are temporarily written to disk, so dense sampling increases extraction cost.
+Changing these settings requires a new workspace under the existing cache policy.
+
+The extraction report includes each selected frame's filename, sharpness, approximate
+sample timestamp, window-rejection counts, and the largest gap between selected
+frames in each clip. Timestamps refer to the FFmpeg sampling grid, not exact source
+presentation timestamps. Empty/blurry/duplicate windows can produce gaps; no poor
+frame is inserted to hide them. Even adjacent populated windows can produce gaps
+approaching twice the window size. Inspect the report and shorten windows if needed.
+The existing minimum of eight usable frames per clip still applies.
+
 Frame names preserve the sampled index and source clip ID. `reports/extraction.json` records every retained frame name and drop counts per reason. Sampling uses FFmpeg's CFR `fps` filter; timestamps can be inferred approximately from sampled indices/FPS, but are not a lossless record of original variable-frame-rate timestamps.
 
 Laplacian variance is measured on 256×144 grayscale thumbnails. `min_sharpness=8` is a starting value; texture and compression change this score. Lower it toward zero to disable blur rejection. `dedup_mae=0.8` is mean absolute grayscale difference on the same thumbnails; zero disables duplicate rejection. A small score can describe either duplicate frames or a slowly moving, low-texture scene, so inspect retained counts.

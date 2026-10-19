@@ -16,12 +16,15 @@ from .common import PipelineError, checked_output, read_json, write_json
 def gpu_flag(command, old, new, runner):
     if runner.dry_run:
         return old
-    help_text = checked_output(["colmap", command, "-h"])
+    help_text = checked_output(["colmap", command, "-h"], include_stderr=True)
     if new in help_text:
         return new
     if old in help_text:
         return old
-    raise PipelineError(f"Unsupported COLMAP CLI for {command}; use environment.yml (3.11.1).")
+    raise PipelineError(
+        f"COLMAP {command} help exposes neither {old} nor {new}. "
+        f"Check `which colmap` and `colmap {command} -h` in the active environment."
+    )
 
 
 def sfm(runner, cfg):

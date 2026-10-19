@@ -13,6 +13,26 @@ def load_config(path):
     if cfg["backend"] not in {"gsplat", "mlp"}:
         raise PipelineError("backend must be gsplat or mlp")
     e, s, t, r = (cfg[k] for k in ("extraction", "sfm", "training", "render"))
+    window = e.get("selection_window_seconds", 0)
+    if (isinstance(window, bool) or not isinstance(window, (int, float))
+            or not math.isfinite(window) or window < 0):
+        raise PipelineError("selection_window_seconds must be finite and nonnegative")
+    if window and window * e["fps"] < 1:
+        raise PipelineError("selection windows must contain at least one candidate interval")
+    candidates = e.get("max_candidates", e["max_frames"])
+    if type(candidates) is not int or candidates < 1:
+        raise PipelineError("max_candidates must be a positive integer")
+    policy = s.get("quality_gate", {})
+    allowed = {"max_point_error_p95", "min_median_track_length", "max_registered_gap_seconds"}
+    if not isinstance(policy, dict) or set(policy) - allowed:
+        raise PipelineError("Unknown reconstruction quality_gate settings")
+    thresholds = list(policy.items())
+    if "max_gap_seconds" in e:
+        thresholds.append(("max_gap_seconds", e["max_gap_seconds"]))
+    for key, value in thresholds:
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise PipelineError(f"{key} must be finite and positive")
     for name, value in [("fps", e["fps"]), ("max_size", e["max_size"]),
                         ("max_frames", e["max_frames"]), ("temporal_window", s["temporal_window"]),
                         ("global_stride", s["global_stride"]), ("iterations", t["iterations"]),

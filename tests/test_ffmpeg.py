@@ -49,6 +49,37 @@ def test_frame_budget_aborts_before_decoding_or_silently_truncating(tmp_path):
     assert not (work / "raw.partial").exists()
 
 
+def test_windowed_extraction_with_separate_candidate_budget(tmp_path):
+    video = tmp_path / "input.mp4"
+    make_video(video)
+    work = tmp_path / "work"
+    cfg = {"fps": 6., "max_size": 128, "max_candidates": 36, "max_frames": 12,
+           "selection_window_seconds": 0.5, "min_sharpness": 0., "dedup_mae": 0.}
+    extract(Runner(work), [video], cfg)
+    report = read_json(work / "reports/extraction.json")
+    clip = report["videos"][0]
+    assert clip["sampled"] == 36
+    assert clip["kept"] == 12
+    assert clip["dropped"]["window"] == 24
+    assert len(list((work / "raw").rglob("*.jpg"))) == 12
+    timestamps = [f["timestamp_seconds"] for f in clip["selected"]]
+    assert timestamps == sorted(timestamps)
+    assert clip["max_gap_seconds"] < 1
+    assert all(f["sharpness"] >= 0 for f in clip["selected"])
+
+
+def test_retained_budget_does_not_publish_partial_selection(tmp_path):
+    video = tmp_path / "input.mp4"
+    make_video(video)
+    work = tmp_path / "work"
+    cfg = {"fps": 6., "max_size": 128, "max_candidates": 36, "max_frames": 8,
+           "selection_window_seconds": 0.5, "min_sharpness": 0., "dedup_mae": 0.}
+    with pytest.raises(PipelineError, match="Selected frames exceed"):
+        extract(Runner(work), [video], cfg)
+    assert not (work / "raw").exists()
+    assert not (work / "reports/extraction.json").exists()
+
+
 def test_rgb_video_encoder_handles_odd_dimensions_and_requested_fps(tmp_path):
     output = tmp_path / "render/scene.mp4"
     frames = [np.full((15, 17, 3), i / 4, dtype=np.float32) for i in range(4)]

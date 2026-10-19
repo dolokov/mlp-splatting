@@ -38,7 +38,7 @@ The installer fetches commit `426e0a24a02124bb07ce0f35e67bb241fba484d4` and appl
 Installation is idempotent for an exactly patched checkout. Unknown source changes and partial application fail instead of being overwritten. Runtime source checks allow only those exact patch edits and reject other tracked changes. The native build uses the same checked patch with its Turing branches inactive.
 
 ```bash
-conda activate drone-scene-mlp
+conda activate mlp
 export CUDA_HOME="$CONDA_PREFIX"
 bash scripts/install_backend.sh mlp
 python -m drone_scene.mlp_compat verify third_party/mlp

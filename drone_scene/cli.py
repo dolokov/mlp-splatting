@@ -8,6 +8,7 @@ from . import backends
 from .common import PipelineError, Runner, digest, read_json, stage, write_json
 from .config import load_config
 from .extract import discover, extract, source_identity
+from .diagnostics import generate_report, open_report
 from .reconstruct import prepare, sfm
 
 STAGES = ("extract", "sfm", "prepare", "train", "render")
@@ -83,7 +84,27 @@ def run_pipeline(args, cfg, runner):
         actions[3][2].append(backends.model_dir(runner.work, "gsplat") / "ply" /
                              f"point_cloud_{cfg['training']['iterations'] - 1}.ply")
     for name, signature, outputs, action in actions[:last + 1]:
-        stage(runner, name, signature, outputs, action)
+        try:
+            stage(runner, name, signature, outputs, action)
+        except PipelineError as exc:
+            if not runner.dry_run and (runner.work / "reports/extraction.json").exists():
+                try:
+                    path, _ = generate_report(runner.work, cfg, error=exc)
+                    print(f"Diagnostics report: {path}")
+                    if not args.no_open_report:
+                        open_report(path)
+                except (PipelineError, OSError, ValueError) as report_exc:
+                    print(f"Warning: diagnostics generation failed: {report_exc}")
+            raise
+        if name in {"extract", "sfm"} and not runner.dry_run:
+            path, diagnostics = generate_report(runner.work, cfg)
+            print(f"Diagnostics report: {path}")
+            final_report = name == "sfm" or last == 0
+            if final_report and not args.no_open_report:
+                open_report(path)
+            if name == "sfm" and diagnostics["failures"]:
+                raise PipelineError("Reconstruction quality gate failed: " +
+                                    "; ".join(diagnostics["failures"]))
     if last >= 3 and not runner.dry_run:
         write_json(runner.work / "resolved-config.json", cfg)
         print(f"Final checkpoint: {backends.checkpoint(runner.work, cfg)}")
@@ -99,6 +120,8 @@ def main(argv=None):
     parser.add_argument("--videos", nargs="+")
     parser.add_argument("--until", choices=STAGES, default="render")
     parser.add_argument("--dry-run", action="store_true", help="Print a plan without creating files or running tools")
+    parser.add_argument("--no-open-report", action="store_true",
+                        help="Generate HTML diagnostics without launching Firefox")
     parser.add_argument("--preprocessing-only", action="store_true", help="doctor: skip training hardware checks")
     args = parser.parse_args(argv)
     try:
